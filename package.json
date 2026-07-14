@@ -1,8 +1,8 @@
 {
-  "name": "vanguard-english-school",
-  "version": "3.0.0",
+  "name": "vanguard-english-school-minimal",
+  "version": "5.0.0",
   "private": true,
-  "description": "Plataforma híbrida da Vanguard English School em apenas sete arquivos",
+  "description": "Plataforma híbrida minimalista da Vanguard English School em sete arquivos",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
