@@ -3,104 +3,87 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#153f2a">
+  <meta name="theme-color" content="#173c2a">
   <meta name="description" content="Plataforma híbrida da Vanguard English School">
+  <meta name="color-scheme" content="light">
   <title>Vanguard English School</title>
-  <link rel="stylesheet" href="./styles.css?v=3.0.0">
-  <!-- Este estilo mínimo evita uma página sem formatação caso o CSS seja renomeado incorretamente. -->
+  <link rel="stylesheet" href="./styles.css?v=5.0.0">
   <style>
-    html{background:#f6f7f3}body{margin:0;font-family:Arial,sans-serif;color:#203029}.hidden{display:none!important}
-    .boot-fallback{position:fixed;inset:0;display:grid;place-items:center;background:#153f2a;color:#fff;z-index:999999}
-    .boot-fallback div{text-align:center;padding:24px}.boot-fallback b{display:block;font-size:1.25rem;margin-top:12px}
+    html{background:#f4f4ef}body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:#1d2b24}.hidden{display:none!important}
   </style>
 </head>
 <body>
-  <div id="boot-fallback" class="boot-fallback">
-    <div>
-      <svg class="boot-logo" viewBox="0 0 120 120" width="82" height="82" aria-hidden="true">
-        <path fill="#fff" d="M11 58C38 56 48 35 55 6c9 20 15 40 7 62-7 20-22 34-37 43 8-18 8-34-14-53Z"/>
-        <path fill="#d27636" d="M58 7c14 18 24 39 18 61-5 19-19 34-35 44 13-22 17-42 8-63C45 35 50 19 58 7Z"/>
-        <path fill="#fff" d="M77 30c15 19 25 40 17 62-4 11-13 20-25 27 10-19 11-37 4-53-5-12-3-25 4-36Z"/>
-      </svg>
-      <b>Vanguard English School</b>
-      <span>Carregando a plataforma…</span>
+  <div id="boot-fallback" class="splash-screen" aria-live="polite">
+    <div class="splash-accent" aria-hidden="true"></div>
+    <div class="splash-content">
+      <div class="splash-logo brand-logo-image" aria-label="Logo da Vanguard English School"></div>
+      <div class="splash-brand">
+        <strong>Vanguard</strong>
+        <span>English School</span>
+      </div>
+      <p>Aprender. Praticar. Evoluir.</p>
+      <div class="splash-progress" aria-hidden="true"><i></i></div>
     </div>
   </div>
-
-  <!-- Logo incorporada no próprio HTML: nenhum arquivo de imagem extra é necessário. -->
-  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
-    <symbol id="vanguard-mark" viewBox="0 0 150 150">
-      <circle cx="75" cy="75" r="72" fill="#fff"/>
-      <path fill="#1e6a35" d="M17 70c34-2 48-28 56-64 12 26 19 51 9 78-8 25-27 44-47 57 10-23 9-45-18-71Z"/>
-      <path fill="#d27636" d="M75 7c17 23 31 49 23 77-7 24-24 43-45 58 17-29 22-55 11-82-7-18-1-39 11-53Z"/>
-      <path fill="#1e6a35" d="M99 35c20 24 31 50 22 77-5 14-17 26-34 35 13-24 15-47 6-67-7-15-4-31 6-45Z"/>
-      <path fill="#d27636" d="M112 49c14 19 20 39 13 60-4 11-12 20-23 27 8-18 9-35 3-50-5-12-2-25 7-37Z"/>
-    </symbol>
-  </svg>
 
   <div id="watermark" class="watermark" aria-hidden="true"></div>
 
   <main id="auth-screen" class="auth-screen hidden">
-    <section class="auth-hero">
-      <div class="brand brand-light">
-        <span class="brand-mark"><svg viewBox="0 0 150 150"><use href="#vanguard-mark"></use></svg></span>
+    <section class="auth-story">
+      <div class="brand brand-on-dark">
+        <span class="brand-mark brand-logo-image" aria-hidden="true"></span>
         <div><strong>Vanguard</strong><span>English School</span></div>
       </div>
 
-      <div class="hero-copy">
-        <span class="eyebrow">Aprender • Praticar • Evoluir</span>
-        <h1>Seu inglês continua durante toda a semana.</h1>
-        <p>Estudo organizado na plataforma e uma aula ao vivo por semana para conversar, praticar a pronúncia e interagir com a turma.</p>
-        <div class="hero-features">
-          <article><b>01</b><span><strong>Estudo objetivo</strong><small>Unidades, aulas curtas e atividades semanais.</small></span></article>
-          <article><b>02</b><span><strong>Contato humano</strong><small>Aula ao vivo com professor e colegas.</small></span></article>
-          <article><b>03</b><span><strong>Acesso protegido</strong><small>Link individual, e-mail validado e sessão única.</small></span></article>
+      <div class="story-copy">
+        <span class="eyebrow light">Plataforma híbrida</span>
+        <h1>O inglês continua depois da aula.</h1>
+        <p>Conteúdo durante a semana e um encontro ao vivo para conversar, praticar e aprender com a turma.</p>
+
+        <div class="story-points" aria-label="Diferenciais da plataforma">
+          <article><span>01</span><div><strong>Semana organizada</strong><small>Atividades, prazos e progresso em um só lugar.</small></div></article>
+          <article><span>02</span><div><strong>Prática de verdade</strong><small>Pronúncia, escuta, escrita e aula ao vivo.</small></div></article>
+          <article><span>03</span><div><strong>Acesso individual</strong><small>Link protegido, e-mail validado e sessão única.</small></div></article>
         </div>
       </div>
 
-      <div class="hero-footer">
-        <span>Vanguard English School</span>
-        <span>Plataforma híbrida de aprendizagem</span>
-      </div>
+      <footer class="story-footer"><span>Vanguard English School</span><span>Learn • Practice • Evolve</span></footer>
     </section>
 
-    <section class="auth-panel">
+    <section class="auth-area">
       <div class="auth-card">
         <div class="mobile-brand brand">
-          <span class="brand-mark"><svg viewBox="0 0 150 150"><use href="#vanguard-mark"></use></svg></span>
+          <span class="brand-mark brand-logo-image" aria-hidden="true"></span>
           <div><strong>Vanguard</strong><span>English School</span></div>
         </div>
 
         <div id="server-warning" class="server-warning hidden" role="alert">
           <strong>O servidor Node.js não está ligado.</strong>
-          <p>Não abra o arquivo HTML com dois cliques. Abra o terminal nesta pasta, execute <code>npm install</code>, depois <code>npm start</code> e entre por <code>http://localhost:3000</code>.</p>
+          <p>Execute <code>npm install</code>, depois <code>npm start</code> e abra <code>http://localhost:3000</code>.</p>
         </div>
 
-        <span id="login-kicker" class="eyebrow dark">Área do professor</span>
-        <h2 id="login-title">Bem-vindo de volta</h2>
-        <p id="login-description" class="muted">Entre para administrar alunos, aulas, presença e relatórios.</p>
+        <header class="login-heading">
+          <span id="login-kicker" class="eyebrow dark">Área do professor</span>
+          <h2 id="login-title">Bem-vindo de volta</h2>
+          <p id="login-description">Entre para administrar alunos, conteúdos, aulas ao vivo e relatórios.</p>
+        </header>
 
         <form id="login-form" class="form-stack" novalidate>
-          <label><span>E-mail</span><input id="login-email" type="email" autocomplete="username" placeholder="seuemail@exemplo.com" required></label>
-          <label>
-            <span>Senha</span>
-            <div class="password-row"><input id="login-password" type="password" autocomplete="current-password" placeholder="Digite sua senha" required><button id="toggle-password" type="button">Mostrar</button></div>
-          </label>
+          <label class="field"><span>E-mail</span><input id="login-email" type="email" autocomplete="username" placeholder="seuemail@exemplo.com" required></label>
+          <label class="field"><span>Senha</span><div class="password-row"><input id="login-password" type="password" autocomplete="current-password" placeholder="Digite sua senha" required><button id="toggle-password" type="button">Mostrar</button></div></label>
           <div id="login-message" class="form-message" aria-live="polite"></div>
-          <button class="button primary large" type="submit">Entrar na plataforma</button>
+          <button class="button primary large full" type="submit"><span>Entrar na plataforma</span><span aria-hidden="true">→</span></button>
         </form>
 
         <div class="demo-box">
-          <strong id="demo-title">Conta de demonstração do professor</strong>
-          <span id="demo-email">professor@vanguard.demo</span>
-          <span id="demo-password">Senha: Professor123</span>
-          <button id="fill-demo" class="text-button" type="button">Preencher dados de teste</button>
+          <div><span class="demo-caption">Acesso de demonstração</span><strong id="demo-title">Conta do professor</strong><small id="demo-email">professor@vanguard.demo</small><small id="demo-password">Senha: Professor123</small></div>
+          <button id="fill-demo" class="button soft" type="button">Preencher</button>
         </div>
 
         <div class="auth-switch">
           <p id="access-help">O aluno entra somente pelo link individual enviado pelo professor.</p>
-          <button id="student-demo" class="button secondary" type="button">Testar como aluna</button>
-          <button id="teacher-login" class="button ghost hidden" type="button">Voltar para professor</button>
+          <button id="student-demo" class="button secondary full" type="button">Testar como aluna</button>
+          <button id="teacher-login" class="button ghost full hidden" type="button">Voltar para professor</button>
         </div>
       </div>
     </section>
@@ -108,8 +91,8 @@
 
   <div id="app-screen" class="app-screen hidden">
     <aside id="sidebar" class="sidebar">
-      <div class="brand brand-light sidebar-brand">
-        <span class="brand-mark"><svg viewBox="0 0 150 150"><use href="#vanguard-mark"></use></svg></span>
+      <div class="brand brand-on-dark sidebar-brand">
+        <span class="brand-mark brand-logo-image" aria-hidden="true"></span>
         <div><strong>Vanguard</strong><span>English School</span></div>
       </div>
       <button id="close-menu" class="close-menu" type="button" aria-label="Fechar menu">×</button>
@@ -125,16 +108,16 @@
     <section class="workspace">
       <header class="topbar">
         <button id="open-menu" class="open-menu" type="button" aria-label="Abrir menu">☰</button>
-        <div><span id="page-kicker">Vanguard English School</span><h1 id="page-title">Início</h1></div>
-        <div class="top-user"><span class="online-dot">● Conectado</span><span id="top-avatar" class="avatar small">V</span><b id="top-name">Conta</b></div>
+        <div class="page-identity"><span id="page-kicker">Vanguard English School</span><h1 id="page-title">Início</h1></div>
+        <div class="top-user"><span class="online-dot"><i></i>Conectado</span><span id="top-avatar" class="avatar small">V</span><b id="top-name">Conta</b></div>
       </header>
-      <main id="view" class="view"><div class="loader"><div><strong>Carregando…</strong><p>Preparando sua área.</p></div></div></main>
+      <main id="view" class="view"><div class="loader"><div class="loader-mark"></div><strong>Preparando sua área</strong><p>Aguarde um instante.</p></div></main>
     </section>
   </div>
 
   <div id="modal-root"></div>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
   <noscript><div class="noscript">Ative o JavaScript do navegador para usar a plataforma.</div></noscript>
-  <script defer src="./app.js?v=3.0.0"></script>
+  <script defer src="./app.js?v=5.0.0"></script>
 </body>
 </html>
