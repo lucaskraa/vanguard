@@ -327,7 +327,16 @@ function registerRoutes(app) {
       [live.id]
     );
     const myAnswer = question ? db.get(`SELECT * FROM live_answers WHERE question_id=? AND student_id=?`, [question.id, req.user.id]) : null;
-    res.json({ live, question, myAnswer });
+    const classAnswers = question && Number(question.revealed)
+      ? db.all(`SELECT a.answer_text,a.audio_path,a.submitted_at,u.name student_name
+                FROM live_answers a JOIN users u ON u.id=a.student_id
+                WHERE a.question_id=? ORDER BY a.submitted_at`, [question.id])
+      : [];
+    const safeQuestion = question ? {
+      ...question,
+      correct_answer: Number(question.revealed) ? question.correct_answer : null
+    } : null;
+    res.json({ live, question: safeQuestion, myAnswer, classAnswers });
   });
 
   router.post('/student/live/:id/join', auth, role('student'), (req, res) => {
@@ -371,9 +380,18 @@ function registerRoutes(app) {
       submissions: Number(db.get(`SELECT COUNT(*) total FROM submissions`).total || 0),
       absences: Number(db.get(`SELECT COUNT(*) total FROM absences WHERE justified=0`).total || 0)
     };
-    const students = db.all(`SELECT id,name,email,active,access_token FROM users WHERE role='student' ORDER BY name`).map(s => ({ ...s, ...studentStats(s.id) }));
+    const currentWeek = weekKey();
+    const students = db.all(`SELECT id,name,email,active,access_token FROM users WHERE role='student' ORDER BY name`).map(student => {
+      const weeklyTotal = Number(db.get(`SELECT COUNT(*) total FROM activities WHERE published=1 AND required=1 AND week_key=?`, [currentWeek]).total || 0);
+      const delivered = Number(db.get(`SELECT COUNT(*) total FROM submissions s JOIN activities a ON a.id=s.activity_id
+                                       WHERE s.student_id=? AND a.published=1 AND a.required=1 AND a.week_key=?`, [student.id, currentWeek]).total || 0);
+      const late = Number(db.get(`SELECT COUNT(*) total FROM submissions s JOIN activities a ON a.id=s.activity_id
+                                  WHERE s.student_id=? AND a.published=1 AND a.required=1 AND a.week_key=?
+                                  AND a.deadline IS NOT NULL AND datetime(s.submitted_at) > datetime(a.deadline)`, [student.id, currentWeek]).total || 0);
+      return { ...student, ...studentStats(student.id), weeklyTotal, delivered, late, missing: Math.max(0, weeklyTotal - delivered) };
+    });
     const live = db.get(`SELECT * FROM live_classes WHERE status!='finished' ORDER BY starts_at LIMIT 1`);
-    res.json({ cards, students, live });
+    res.json({ cards, students, live, currentWeek });
   });
 
   router.get('/teacher/students', auth, role('teacher'), (req, res) => {
@@ -508,7 +526,9 @@ function registerRoutes(app) {
     const student = db.get(`SELECT id,name,email,active,created_at FROM users WHERE id=? AND role='student'`, [req.params.id]);
     if (!student) return res.status(404).json({ error: 'Aluno não encontrado.' });
     const submissions = db.all(
-      `SELECT s.*,a.title activity_title,a.type,u.title unit_title FROM submissions s
+      `SELECT s.*,a.title activity_title,a.type,a.deadline,u.title unit_title,
+              CASE WHEN a.deadline IS NOT NULL AND datetime(s.submitted_at) > datetime(a.deadline) THEN 1 ELSE 0 END is_late
+       FROM submissions s
        JOIN activities a ON a.id=s.activity_id JOIN lessons l ON l.id=a.lesson_id JOIN units u ON u.id=l.unit_id
        WHERE s.student_id=? ORDER BY s.submitted_at DESC`, [student.id]
     );
@@ -597,6 +617,12 @@ async function start() {
   const port = Number(process.env.PORT || 3000);
 
   app.disable('x-powered-by');
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    next();
+  });
   app.use(express.json({ limit: '5mb' }));
   app.use(express.urlencoded({ extended: true, limit: '5mb' }));
   app.use(session({
@@ -604,14 +630,18 @@ async function start() {
     secret: process.env.SESSION_SECRET || 'vanguard-desenvolvimento-troque-em-producao',
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: 'lax', maxAge: 12 * 60 * 60 * 1000 }
+    cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 12 * 60 * 60 * 1000 }
   }));
 
   registerRoutes(app);
   app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-  app.get(['/', '/index.html'], (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-  app.get('/styles.css', (_req, res) => res.sendFile(path.join(__dirname, 'styles.css')));
-  app.get('/app.js', (_req, res) => res.sendFile(path.join(__dirname, 'app.js')));
+  const sendNoCache = file => (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.sendFile(path.join(__dirname, file));
+  };
+  app.get(['/', '/index.html'], sendNoCache('index.html'));
+  app.get('/styles.css', sendNoCache('styles.css'));
+  app.get('/app.js', sendNoCache('app.js'));
   app.get('/access/:token', (req, res) => res.redirect(`/index.html?token=${encodeURIComponent(req.params.token)}`));
   app.get('/api/health', (_req, res) => res.json({ ok: true, name: 'Vanguard English School' }));
 
@@ -623,10 +653,15 @@ async function start() {
   });
 
   app.listen(port, () => {
-    console.log(`\nVanguard English School: http://localhost:${port}`);
+    console.log('\n============================================================');
+    console.log('  VANGUARD ENGLISH SCHOOL — PLATAFORMA INICIADA');
+    console.log('============================================================');
+    console.log(`Acesse: http://localhost:${port}`);
     console.log('Professor: professor@vanguard.demo / Professor123');
     console.log(`Aluno: http://localhost:${port}/index.html?token=ana-vanguard-demo`);
-    console.log('Aluno: ana@vanguard.demo / Aluno123\n');
+    console.log('Aluno: ana@vanguard.demo / Aluno123');
+    console.log('Não abra index.html com dois cliques; use o endereço acima.');
+    console.log('============================================================\n');
   });
 }
 
