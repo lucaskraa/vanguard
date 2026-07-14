@@ -1,839 +1,2008 @@
-(() => {
-  'use strict';
+'use strict';
 
-  const $ = (selector, root = document) => root.querySelector(selector);
-  const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const authScreen = $('#auth-screen');
-  const appScreen = $('#app-screen');
-  const view = $('#view');
-  const navigation = $('#navigation');
-  const modalRoot = $('#modal-root');
-  const toastRoot = $('#toast-root');
-  const splashStartedAt = performance.now();
-  let splashClosing = false;
-
-  function finishBoot() {
-    const boot = $('#boot-fallback');
-    if (!boot || splashClosing) return;
-    splashClosing = true;
-    const minimumVisibleTime = 1250;
-    const wait = Math.max(0, minimumVisibleTime - (performance.now() - splashStartedAt));
-    setTimeout(() => {
-      boot.classList.add('is-leaving');
-      setTimeout(() => boot.remove(), 460);
-    }, wait);
-  }
-
-  function showServerWarning(show = true) {
-    const warning = $('#server-warning');
-    if (warning) warning.classList.toggle('hidden', !show);
-  }
-
-  const state = {
-    user: null,
-    settings: {},
-    token: new URLSearchParams(location.search).get('token') || '',
-    route: '',
-    routeData: {},
-    interval: null,
-    heartbeat: null,
-    mediaRecorder: null,
-    mediaChunks: [],
-    transcript: ''
+const VanguardApp = (() => {
+  const STORAGE = {
+    session: 'vanguard_session_v2',
+    demo: 'vanguard_demo_database_v2',
+    tab: 'vanguard_active_tab_v2'
   };
 
-  const studentMenu = [
-    { section: 'Meu curso' },
-    { route: 'home', icon: '⌂', label: 'Página inicial' },
-    { route: 'week', icon: '✓', label: 'Atividades da semana' },
-    { route: 'units', icon: '▤', label: 'Unidades e aulas' },
-    { route: 'live', icon: '●', label: 'Aula ao vivo' },
-    { section: 'Acompanhamento' },
-    { route: 'progress', icon: '↗', label: 'Progresso, notas e faltas' },
-    { route: 'notices', icon: '!', label: 'Avisos' },
-    { route: 'profile', icon: '☺', label: 'Meu perfil' }
-  ];
+  const state = {
+    mode: 'checking',
+    session: localStorage.getItem(STORAGE.session) || '',
+    user: null,
+    data: null,
+    page: '',
+    accessToken: new URLSearchParams(location.search).get('token') || '',
+    activeUnitId: null,
+    activeLessonId: null,
+    activeActivityId: null,
+    activeReportStudentId: null,
+    mediaRecorder: null,
+    audioChunks: [],
+    audioBlob: null,
+    audioUrl: '',
+    transcript: '',
+    recognition: null,
+    liveTimer: null,
+    livePoll: null,
+    tabId: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
+  };
 
-  const teacherMenu = [
-    { section: 'Administração' },
-    { route: 'teacher-dashboard', icon: '⌂', label: 'Painel inicial' },
-    { route: 'students', icon: '♟', label: 'Cadastro de alunos' },
-    { route: 'builder', icon: '+', label: 'Aulas e atividades' },
-    { route: 'teacher-live', icon: '●', label: 'Aula ao vivo' },
-    { route: 'attendance', icon: '✓', label: 'Presenças e faltas' },
-    { route: 'reports', icon: '▤', label: 'Relatórios' },
-    { route: 'settings', icon: '⚙', label: 'Configurações' }
-  ];
+  const elements = {};
 
-  function escapeHtml(value = '') {
-    return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
+  const pageMeta = {
+    dashboard: ['Início', 'SEU CURSO'],
+    weekly: ['Atividades da semana', 'ROTINA DE ESTUDOS'],
+    units: ['Unidades e aulas', 'CONTEÚDO DO CURSO'],
+    writing: ['Atividade escrita', 'PRÁTICA DE ESCRITA'],
+    pronunciation: ['Atividade de pronúncia', 'PRÁTICA DE FALA'],
+    live: ['Aula ao vivo', 'CONVERSAÇÃO'],
+    progress: ['Progresso, notas e faltas', 'SEU DESEMPENHO'],
+    notices: ['Avisos', 'COMUNICAÇÃO'],
+    profile: ['Perfil', 'SUA CONTA'],
+    'teacher-dashboard': ['Painel do professor', 'VISÃO GERAL'],
+    students: ['Cadastro de alunos', 'GESTÃO DA TURMA'],
+    builder: ['Aulas e atividades', 'CONTEÚDO DO CURSO'],
+    attendance: ['Presenças e faltas', 'ACOMPANHAMENTO'],
+    reports: ['Relatórios dos alunos', 'DESEMPENHO DA TURMA'],
+    settings: ['Configurações', 'REGRAS DO CURSO']
+  };
+
+  const navigation = {
+    student: [
+      ['dashboard', '⌂', 'Início'],
+      ['weekly', '✓', 'Atividades da semana'],
+      ['units', '▤', 'Unidades e aulas'],
+      ['writing', '✎', 'Atividade escrita'],
+      ['pronunciation', '◉', 'Pronúncia'],
+      ['live', '●', 'Aula ao vivo'],
+      ['progress', '↗', 'Progresso e faltas'],
+      ['notices', '!', 'Avisos'],
+      ['profile', '○', 'Perfil']
+    ],
+    teacher: [
+      ['teacher-dashboard', '⌂', 'Painel inicial'],
+      ['students', '◎', 'Alunos'],
+      ['builder', '＋', 'Aulas e atividades'],
+      ['live', '●', 'Aula ao vivo'],
+      ['attendance', '✓', 'Presenças e faltas'],
+      ['reports', '↗', 'Relatórios'],
+      ['notices', '!', 'Avisos'],
+      ['settings', '⚙', 'Configurações']
+    ]
+  };
+
+  function $(selector, root = document) {
+    return root.querySelector(selector);
   }
 
-  function formatDate(value, includeTime = true) {
-    if (!value) return 'Não definido';
+  function $$(selector, root = document) {
+    return [...root.querySelectorAll(selector)];
+  }
+
+  function escapeHTML(value) {
+    return String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, Number(value) || 0));
+  }
+
+  function initials(name = '') {
+    return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'VE';
+  }
+
+  function formatDate(value, withTime = true) {
+    if (!value) return 'Sem data definida';
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return String(value);
-    return new Intl.DateTimeFormat('pt-BR', includeTime
-      ? { dateStyle: 'short', timeStyle: 'short' }
-      : { dateStyle: 'short' }).format(date);
+    if (Number.isNaN(date.getTime())) return value;
+    return new Intl.DateTimeFormat('pt-BR', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      ...(withTime ? { hour: '2-digit', minute: '2-digit' } : {})
+    }).format(date);
   }
 
-  function initials(name = 'V') {
-    return name.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join('').toUpperCase();
+  function relativeDate(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    const diff = date.getTime() - Date.now();
+    const days = Math.ceil(diff / 86400000);
+    if (days === 0) return 'Hoje';
+    if (days === 1) return 'Amanhã';
+    if (days > 1) return `Em ${days} dias`;
+    if (days === -1) return 'Ontem';
+    return `${Math.abs(days)} dias atrás`;
   }
 
-  function typeLabel(type) {
-    return ({
+  function activityTypeLabel(type) {
+    return {
       multiple_choice: 'Alternativas',
       fill_blank: 'Completar frase',
       writing: 'Escrita',
       listening: 'Escuta',
       pronunciation: 'Pronúncia'
-    })[type] || type;
+    }[type] || type;
   }
 
   function activityIcon(type) {
-    return ({ multiple_choice: 'A', fill_blank: '…', writing: '✎', listening: '♫', pronunciation: '♬' })[type] || '✓';
+    return {
+      multiple_choice: 'A',
+      fill_blank: '…',
+      writing: '✎',
+      listening: '♫',
+      pronunciation: '◉'
+    }[type] || '•';
   }
 
-  async function api(url, options = {}) {
-    const config = { credentials: 'same-origin', ...options, headers: { ...(options.headers || {}) } };
-    if (options.body && !(options.body instanceof FormData) && typeof options.body !== 'string') {
-      config.headers['Content-Type'] = 'application/json';
-      config.body = JSON.stringify(options.body);
-    }
-    let response;
+  function statusBadge(text, kind = 'muted') {
+    return `<span class="badge badge--${kind}">${escapeHTML(text)}</span>`;
+  }
+
+  function getBaseURL() {
+    return `${location.origin}${location.pathname.replace(/index\.html$/i, '')}`;
+  }
+
+  function studentLink(token) {
+    return `${getBaseURL()}?token=${encodeURIComponent(token)}`;
+  }
+
+  function toast(title, message = '', type = 'success') {
+    const item = document.createElement('article');
+    item.className = `toast ${type === 'error' ? 'is-error' : ''}`;
+    item.innerHTML = `
+      <div class="toast__icon">${type === 'error' ? '!' : '✓'}</div>
+      <div><strong>${escapeHTML(title)}</strong><p>${escapeHTML(message)}</p></div>
+      <button type="button" aria-label="Fechar">×</button>
+    `;
+    item.querySelector('button').addEventListener('click', () => item.remove());
+    elements.toastRoot.append(item);
+    setTimeout(() => item.remove(), 4800);
+  }
+
+  function openModal({ title, subtitle = '', body = '', wide = false, footer = '' }) {
+    document.body.classList.add('modal-open');
+    elements.modalRoot.innerHTML = `
+      <section class="modal ${wide ? 'modal--wide' : ''}" role="dialog" aria-modal="true" aria-label="${escapeHTML(title)}">
+        <header class="modal__header">
+          <div><h2>${escapeHTML(title)}</h2>${subtitle ? `<p>${escapeHTML(subtitle)}</p>` : ''}</div>
+          <button class="modal__close" type="button" data-action="close-modal" aria-label="Fechar">×</button>
+        </header>
+        <div class="modal__body">${body}</div>
+        ${footer ? `<footer class="modal__footer">${footer}</footer>` : ''}
+      </section>
+    `;
+  }
+
+  function closeModal() {
+    document.body.classList.remove('modal-open');
+    elements.modalRoot.innerHTML = '';
+  }
+
+  function loadingPage() {
+    elements.content.innerHTML = '<div class="loading-page"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>';
+  }
+
+  async function api(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    if (!(options.body instanceof FormData)) headers.set('content-type', 'application/json');
+    if (state.session) headers.set('authorization', `Bearer ${state.session}`);
+    const response = await fetch(path, { ...options, headers });
+    let payload = {};
     try {
-      response = await fetch(url, config);
-    } catch (networkError) {
-      showServerWarning(true);
-      const error = new Error('O servidor Node.js não está ligado. Execute npm install, depois npm start, e abra http://localhost:3000.');
-      error.status = 0;
-      error.cause = networkError;
-      throw error;
+      payload = await response.json();
+    } catch {
+      payload = {};
     }
-    let data = {};
-    try { data = await response.json(); } catch {}
     if (!response.ok) {
-      const error = new Error(data.error || 'Não foi possível concluir a operação.');
+      const error = new Error(payload.error || `Erro ${response.status}`);
       error.status = response.status;
       throw error;
     }
-    showServerWarning(false);
+    return payload;
+  }
+
+  function demoSeed() {
+    const due = new Date(Date.now() + 5 * 86400000);
+    due.setHours(23, 0, 0, 0);
+    const liveDate = new Date(Date.now() + 3 * 86400000);
+    liveDate.setHours(19, 0, 0, 0);
+    const created = new Date().toISOString();
+
+    return {
+      version: 2,
+      settings: {
+        id: 1,
+        school_name: 'Vanguard English School',
+        course_name: 'English Hybrid',
+        weekly_minimum_percent: 70,
+        live_minimum_percent: 75,
+        live_room_url: 'https://meet.jit.si/VanguardEnglishDemoRoom',
+        timezone: 'America/Sao_Paulo',
+        content_protection: true
+      },
+      users: [
+        { id: 1, role: 'teacher', name: 'Professora Marina', email: 'professor@vanguard.demo', password: 'Professor123', avatar: 'PM', blocked: false },
+        { id: 2, role: 'student', name: 'Ana Souza', email: 'ana@vanguard.demo', password: 'Aluno123', avatar: 'AS', blocked: false, access_token: 'ana-vanguard-demo' },
+        { id: 3, role: 'student', name: 'Bruno Lima', email: 'bruno@vanguard.demo', password: 'Aluno123', avatar: 'BL', blocked: false, access_token: 'bruno-vanguard-demo' },
+        { id: 4, role: 'student', name: 'Camila Rocha', email: 'camila@vanguard.demo', password: 'Aluno123', avatar: 'CR', blocked: false, access_token: 'camila-vanguard-demo' },
+        { id: 5, role: 'student', name: 'Diego Martins', email: 'diego@vanguard.demo', password: 'Aluno123', avatar: 'DM', blocked: false, access_token: 'diego-vanguard-demo' }
+      ],
+      units: [
+        {
+          id: 1,
+          title: 'Unit 1 — Everyday English',
+          description: 'Rotina, hábitos e conversas do dia a dia.',
+          position: 1,
+          published: true,
+          lessons: [
+            {
+              id: 1,
+              unit_id: 1,
+              title: 'Present Continuous',
+              summary: 'Como falar sobre ações que estão acontecendo agora.',
+              written_content: 'Usamos am, is ou are + verbo com -ing. Essa estrutura mostra que uma ação está acontecendo agora ou durante um período temporário.',
+              examples: ['I am reading now.', 'They are practicing English.', 'He is not sleeping.'],
+              video_url: 'https://www.youtube.com/embed/OLx3IrlVf6Y',
+              audio_url: '',
+              image_url: '',
+              position: 1,
+              published: true,
+              activities: [
+                { id: 1, lesson_id: 1, week_label: 'Semana atual', title: 'Escolha a frase correta', type: 'multiple_choice', prompt: 'Qual frase descreve uma ação acontecendo agora?', options: ['I study English every Monday.', 'I am studying English now.', 'I studied English yesterday.'], correct_answer: 'I am studying English now.', explanation: 'Para uma ação acontecendo neste momento, use am/is/are + verbo com -ing.', media_url: '', required: true, points: 10, due_at: due.toISOString(), position: 1 },
+                { id: 2, lesson_id: 1, week_label: 'Semana atual', title: 'Complete a frase', type: 'fill_blank', prompt: 'She ___ speaking with the teacher.', options: [], correct_answer: 'is', explanation: 'Com she usamos is: She is speaking.', media_url: '', required: true, points: 10, due_at: due.toISOString(), position: 2 },
+                { id: 5, lesson_id: 1, week_label: 'Semana atual', title: 'Pronunciation challenge', type: 'pronunciation', prompt: 'Leia em voz alta: I am practicing English every day.', options: [], correct_answer: 'I am practicing English every day.', explanation: 'Fale com calma e destaque os sons de practicing e every.', media_url: '', required: true, points: 10, due_at: due.toISOString(), position: 5 }
+              ]
+            },
+            {
+              id: 2,
+              unit_id: 1,
+              title: 'Daily Routines',
+              summary: 'Vocabulário e frases para descrever sua rotina.',
+              written_content: 'Use o Simple Present para hábitos: I wake up at seven. She studies in the afternoon.',
+              examples: ['I usually have breakfast at 7.', 'She goes to school by bus.', 'We practice every week.'],
+              video_url: '', audio_url: '', image_url: '', position: 2, published: true,
+              activities: [
+                { id: 3, lesson_id: 2, week_label: 'Semana atual', title: 'Escreva sobre sua rotina', type: 'writing', prompt: 'Escreva uma frase em inglês contando o que você faz pela manhã.', options: [], correct_answer: '', explanation: 'Use o Simple Present e tente incluir um horário.', media_url: '', required: true, points: 10, due_at: due.toISOString(), position: 3 }
+              ]
+            }
+          ]
+        },
+        {
+          id: 2,
+          title: 'Unit 2 — Real Conversations',
+          description: 'Escuta, respostas rápidas e situações reais.',
+          position: 2,
+          published: true,
+          lessons: [
+            {
+              id: 3, unit_id: 2, title: 'Listening in Context', summary: 'Treino de escuta com perguntas curtas.', written_content: 'Ouça primeiro sem ler. Depois identifique palavras-chave e responda com uma frase completa.', examples: ['Could you repeat that?', 'What do you mean?', 'I understand now.'], video_url: '', audio_url: '', image_url: '', position: 1, published: true,
+              activities: [
+                { id: 4, lesson_id: 3, week_label: 'Semana atual', title: 'Listening practice', type: 'listening', prompt: 'Ouça a frase e escreva o que foi dito.', options: [], correct_answer: 'Could you repeat that?', explanation: 'A expressão é usada para pedir que alguém repita o que disse.', media_url: '', required: true, points: 10, due_at: due.toISOString(), position: 4 }
+              ]
+            }
+          ]
+        },
+        {
+          id: 3,
+          title: 'Unit 3 — Plans and Experiences',
+          description: 'Planos, experiências e comunicação com confiança.',
+          position: 3,
+          published: true,
+          lessons: [
+            { id: 4, unit_id: 3, title: 'Talking about Plans', summary: 'Use going to para falar de planos.', written_content: 'Estrutura: subject + be + going to + verb. Exemplo: I am going to study tonight.', examples: ['We are going to travel.', 'Are you going to join the class?', 'She is not going to miss it.'], video_url: '', audio_url: '', image_url: '', position: 1, published: true, activities: [] }
+          ]
+        }
+      ],
+      attempts: [
+        { id: 1, activity_id: 1, student_id: 2, answer_text: 'I am studying English now.', transcript: '', audio_url: '', score: 10, correct: true, feedback: 'Muito bem!', created_at: created },
+        { id: 2, activity_id: 2, student_id: 2, answer_text: 'is', transcript: '', audio_url: '', score: 10, correct: true, feedback: 'Resposta correta.', created_at: created },
+        { id: 3, activity_id: 3, student_id: 2, answer_text: 'I have breakfast at seven.', transcript: '', audio_url: '', score: 8, correct: true, feedback: 'Boa frase.', created_at: created },
+        { id: 4, activity_id: 1, student_id: 3, answer_text: 'I study English every Monday.', transcript: '', audio_url: '', score: 3, correct: false, feedback: 'Revise o Present Continuous.', created_at: created }
+      ],
+      notices: [
+        { id: 1, teacher_id: 1, student_id: null, title: 'Bem-vindos à nova semana', message: 'As atividades ficam disponíveis até domingo às 23h. Na aula ao vivo vamos praticar conversação.', created_at: created },
+        { id: 2, teacher_id: 1, student_id: 2, title: 'Ótimo progresso, Ana!', message: 'Você concluiu as primeiras atividades. Continue praticando a pronúncia.', created_at: created }
+      ],
+      liveClasses: [
+        { id: 1, title: 'Conversation Club — Everyday English', starts_at: liveDate.toISOString(), duration_minutes: 60, minimum_percent: 75, room_url: 'https://meet.jit.si/VanguardEnglishDemoRoom', status: 'scheduled', created_at: created }
+      ],
+      livePresence: [],
+      liveQuestions: [
+        { id: 1, live_class_id: 1, prompt: 'What are you doing right now?', correct_answer: 'I am studying English.', response_type: 'text', time_limit_seconds: 60, published: false, answers_released: false, selected_student_id: null, created_at: created }
+      ],
+      liveAnswers: [],
+      absences: [
+        { id: 1, student_id: 4, kind: 'online', reference_key: '2026-W28', reason: 'Não concluiu a porcentagem mínima da semana.', justified: false, created_at: created }
+      ],
+      counters: { user: 6, unit: 4, lesson: 5, activity: 6, attempt: 5, notice: 3, live: 2, question: 2, answer: 1, absence: 2 }
+    };
+  }
+
+  function getDemoDB() {
+    let data;
+    try {
+      data = JSON.parse(localStorage.getItem(STORAGE.demo));
+    } catch {
+      data = null;
+    }
+    if (!data || data.version !== 2) {
+      data = demoSeed();
+      saveDemoDB(data);
+    }
     return data;
   }
 
-  function toast(message, type = 'success') {
-    const element = document.createElement('div');
-    element.className = `toast ${type === 'error' ? 'error' : ''}`;
-    element.textContent = message;
-    toastRoot.appendChild(element);
-    setTimeout(() => element.remove(), 3800);
+  function saveDemoDB(data) {
+    localStorage.setItem(STORAGE.demo, JSON.stringify(data));
   }
 
-  function setPage(title, kicker = 'Vanguard English School') {
-    $('#page-title').textContent = title;
-    $('#page-kicker').textContent = kicker;
-    document.title = `${title} | Vanguard English School`;
+  function flattenActivities(units) {
+    return units.flatMap((unit) => unit.lessons.flatMap((lesson) => lesson.activities.map((activity) => ({
+      ...activity,
+      lesson_title: lesson.title,
+      unit_title: unit.title
+    }))));
   }
 
-  function loading(text = 'Carregando...') {
-    view.innerHTML = `<div class="loader"><div><strong>${escapeHtml(text)}</strong><p>Aguarde um instante.</p></div></div>`;
+  function demoStudentDashboard(studentId) {
+    const db = getDemoDB();
+    const student = db.users.find((user) => user.id === Number(studentId));
+    const activities = flattenActivities(db.units).map((activity) => {
+      const attempts = db.attempts.filter((attempt) => attempt.activity_id === activity.id && attempt.student_id === Number(studentId));
+      return {
+        ...activity,
+        attempt_count: attempts.length,
+        best_score: attempts.length ? Math.max(...attempts.map((attempt) => Number(attempt.score || 0))) : null
+      };
+    });
+    const completed = activities.filter((activity) => activity.attempt_count > 0).length;
+    const bestAttempts = activities.map((activity) => db.attempts
+      .filter((attempt) => attempt.activity_id === activity.id && attempt.student_id === Number(studentId))
+      .sort((a, b) => Number(b.score) - Number(a.score))[0]).filter(Boolean);
+    const grade = bestAttempts.length ? Math.round((bestAttempts.reduce((sum, attempt) => sum + Number(attempt.score || 0), 0) / (bestAttempts.length * 10)) * 100) / 10 : 0;
+    const absences = db.absences.filter((absence) => absence.student_id === Number(studentId));
+    const notices = db.notices.filter((notice) => notice.student_id === null || notice.student_id === Number(studentId)).sort((a, b) => b.id - a.id);
+    const attempts = db.attempts.filter((attempt) => attempt.student_id === Number(studentId)).sort((a, b) => b.id - a.id).map((attempt) => {
+      const activity = activities.find((item) => item.id === attempt.activity_id);
+      return { ...attempt, activity_title: activity?.title || 'Atividade', activity_type: activity?.type || '' };
+    });
+    return {
+      student: { ...student },
+      settings: { ...db.settings },
+      summary: {
+        progress: activities.length ? Math.round((completed / activities.length) * 100) : 0,
+        grade,
+        absences: absences.filter((absence) => !absence.justified).length,
+        completed,
+        total: activities.length
+      },
+      activities,
+      units: structuredClone(db.units),
+      notices,
+      absences,
+      liveClass: db.liveClasses.find((live) => live.status !== 'finished') || null,
+      attempts
+    };
   }
 
-  function empty(title, text, action = '') {
-    return `<div class="empty-state"><div><h2>${escapeHtml(title)}</h2><p>${escapeHtml(text)}</p>${action}</div></div>`;
+  function demoTeacherDashboard() {
+    const db = getDemoDB();
+    const students = db.users.filter((user) => user.role === 'student').map(({ password, ...student }) => ({ ...student }));
+    const activities = flattenActivities(db.units);
+    const reports = students.map((student) => {
+      const dashboard = demoStudentDashboard(student.id);
+      return { ...student, ...dashboard.summary };
+    });
+    return {
+      settings: { ...db.settings },
+      summary: {
+        students: students.length,
+        activeStudents: students.filter((student) => !student.blocked).length,
+        units: db.units.length,
+        activities: activities.length,
+        pending: reports.filter((report) => report.progress < db.settings.weekly_minimum_percent).length
+      },
+      students,
+      units: structuredClone(db.units),
+      notices: db.notices.slice().sort((a, b) => b.id - a.id).map((notice) => ({ ...notice, student_name: students.find((student) => student.id === notice.student_id)?.name || null })),
+      liveClasses: db.liveClasses.slice().sort((a, b) => new Date(b.starts_at) - new Date(a.starts_at)),
+      absences: db.absences.slice().sort((a, b) => b.id - a.id).map((absence) => ({ ...absence, student_name: students.find((student) => student.id === absence.student_id)?.name, student_email: students.find((student) => student.id === absence.student_id)?.email })),
+      attempts: db.attempts.slice().sort((a, b) => b.id - a.id).map((attempt) => ({
+        ...attempt,
+        student_name: students.find((student) => student.id === attempt.student_id)?.name,
+        activity_title: activities.find((activity) => activity.id === attempt.activity_id)?.title,
+        activity_type: activities.find((activity) => activity.id === attempt.activity_id)?.type
+      })),
+      reports
+    };
   }
 
-  function modal(title, body, footer = '', wide = false) {
-    modalRoot.innerHTML = `<div class="modal-backdrop"><section class="modal ${wide ? 'wide' : ''}"><header class="modal-header"><h3>${escapeHtml(title)}</h3><button class="modal-close" type="button">×</button></header><div class="modal-body">${body}</div>${footer ? `<footer class="modal-footer">${footer}</footer>` : ''}</section></div>`;
-    const close = () => { modalRoot.innerHTML = ''; };
-    $('.modal-close', modalRoot).onclick = close;
-    $('.modal-backdrop', modalRoot).onclick = event => { if (event.target === event.currentTarget) close(); };
-    return close;
+  async function checkEnvironment() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1800);
+    try {
+      const response = await fetch('./api/health', { signal: controller.signal, cache: 'no-store' });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error('Servidor indisponível');
+      state.mode = 'server';
+      setEnvironmentBadge('online', 'Servidor Node.js conectado');
+    } catch {
+      state.mode = 'demo';
+      setEnvironmentBadge('demo', 'Demonstração no GitHub Pages');
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
-  function stopTimers() {
-    clearInterval(state.interval);
-    clearInterval(state.heartbeat);
-    state.interval = null;
-    state.heartbeat = null;
-    if (state.mediaRecorder?.state === 'recording') state.mediaRecorder.stop();
+  function setEnvironmentBadge(kind, text) {
+    elements.environmentBadge.className = `environment-badge is-${kind}`;
+    elements.environmentBadge.querySelector('b').textContent = text;
   }
 
-  function showLogin(token = '') {
-    finishBoot();
-    state.token = token;
-    appScreen.classList.add('hidden');
-    authScreen.classList.remove('hidden');
-    showServerWarning(location.protocol === 'file:');
-    const student = Boolean(token);
-    $('#login-kicker').textContent = student ? 'Link individual protegido' : 'Área do professor';
-    $('#login-title').textContent = student ? 'Área do aluno' : 'Bem-vindo de volta';
-    $('#login-description').textContent = student
-      ? 'Entre com o e-mail cadastrado para este link. Outro e-mail não terá acesso.'
-      : 'Entre para administrar alunos, aulas e relatórios.';
-    $('#demo-title').textContent = student ? 'Demonstração da aluna Ana' : 'Conta de demonstração do professor';
-    $('#demo-email').textContent = student ? 'ana@vanguard.demo' : 'professor@vanguard.demo';
-    $('#demo-password').textContent = student ? 'Senha: Aluno123' : 'Senha: Professor123';
-    $('#student-demo').classList.toggle('hidden', student);
-    $('#teacher-login').classList.toggle('hidden', !student);
-    $('#access-help').textContent = student
-      ? 'Este acesso encerra uma sessão anterior aberta em outro aparelho.'
-      : 'O aluno deve entrar pelo link individual enviado pelo professor.';
-    $('#login-email').value = '';
-    $('#login-password').value = '';
-    $('#login-message').textContent = '';
-  }
-
-  function createWatermark() {
-    const layer = $('#watermark');
-    layer.innerHTML = '';
-    if (state.user?.role !== 'student' || Number(state.settings.content_protection) !== 1) {
-      layer.classList.remove('active');
-      document.body.classList.remove('protected');
+  async function validateAccessToken() {
+    if (!state.accessToken) {
+      configureTeacherLogin();
       return;
     }
-    layer.classList.add('active');
-    document.body.classList.add('protected');
-    const text = `${state.user.name} • ${state.user.email}`;
-    for (let y = 0; y < innerHeight + 200; y += 150) {
-      for (let x = -100; x < innerWidth + 300; x += 280) {
-        const span = document.createElement('span');
-        span.textContent = text;
-        span.style.left = `${x}px`;
-        span.style.top = `${y + ((x / 280) % 2) * 50}px`;
-        layer.appendChild(span);
+    try {
+      let student;
+      if (state.mode === 'server') {
+        const payload = await api(`/api/access/${encodeURIComponent(state.accessToken)}`);
+        student = payload.student;
+      } else {
+        const db = getDemoDB();
+        student = db.users.find((user) => user.role === 'student' && user.access_token === state.accessToken && !user.blocked);
+        if (!student) throw new Error('Link individual inválido ou bloqueado.');
       }
+      configureStudentLogin(student);
+    } catch (error) {
+      configureStudentLogin(null, error.message);
     }
   }
 
-  function enableProtection() {
-    createWatermark();
-    if (state.user?.role !== 'student' || Number(state.settings.content_protection) !== 1) return;
-    document.oncontextmenu = event => {
-      if (!event.target.closest('input,textarea,select')) event.preventDefault();
-    };
-    document.oncopy = event => {
-      if (!event.target.closest('input,textarea')) {
-        event.preventDefault();
-        toast('A cópia do conteúdo está bloqueada nesta área.', 'error');
-      }
-    };
-    document.onkeydown = event => {
-      if ((event.ctrlKey || event.metaKey) && ['c', 'u', 's', 'p'].includes(event.key.toLowerCase()) && !event.target.closest('input,textarea')) {
-        event.preventDefault();
-        toast('Esta ação foi bloqueada para proteger o conteúdo.', 'error');
-      }
-    };
+  function configureTeacherLogin() {
+    elements.loginEyebrow.textContent = 'ÁREA DO PROFESSOR';
+    elements.loginTitle.textContent = 'Bem-vindo de volta';
+    elements.loginCopy.textContent = 'Entre para administrar alunos, aulas, atividades e relatórios.';
+    elements.demoLabel.textContent = 'Conta do professor';
+    elements.demoCredentials.textContent = 'professor@vanguard.demo · Professor123';
+    elements.studentLinkNote.textContent = 'O aluno entra pelo link individual gerado no painel do professor.';
+    elements.loginEmail.value = '';
+    elements.loginEmail.readOnly = false;
   }
 
-  function renderNavigation() {
-    const items = state.user.role === 'teacher' ? teacherMenu : studentMenu;
-    navigation.innerHTML = items.map(item => item.section
-      ? `<div class="nav-label">${escapeHtml(item.section)}</div>`
-      : `<button class="nav-item ${item.route === state.route ? 'active' : ''}" data-route="${item.route}" type="button"><span class="icon">${item.icon}</span>${escapeHtml(item.label)}</button>`
-    ).join('');
-    $$('.nav-item', navigation).forEach(button => button.onclick = () => navigate(button.dataset.route));
+  function configureStudentLogin(student, error = '') {
+    elements.loginEyebrow.textContent = 'ACESSO INDIVIDUAL DO ALUNO';
+    elements.loginTitle.textContent = student ? `Olá, ${student.name.split(' ')[0]}` : 'Link não encontrado';
+    elements.loginCopy.textContent = student ? 'Confirme sua senha para acessar suas atividades e a aula ao vivo.' : error;
+    elements.demoLabel.textContent = 'Conta de demonstração do aluno';
+    elements.demoCredentials.textContent = 'ana@vanguard.demo · Aluno123';
+    elements.studentLinkNote.textContent = 'Este link funciona apenas com o e-mail cadastrado pelo professor.';
+    elements.loginEmail.value = student?.email || '';
+    elements.loginEmail.readOnly = Boolean(student);
   }
 
-  function showApp() {
-    finishBoot();
-    showServerWarning(false);
-    authScreen.classList.add('hidden');
-    appScreen.classList.remove('hidden');
-    const short = state.user.name.split(' ')[0];
-    $('#side-name').textContent = state.user.name;
-    $('#side-role').textContent = state.user.role === 'teacher' ? 'Professor' : 'Aluno';
-    $('#side-avatar').textContent = initials(state.user.name);
-    $('#top-avatar').textContent = initials(state.user.name);
-    $('#top-name').textContent = short;
-    enableProtection();
-    const hash = location.hash.replace('#', '');
-    const defaultRoute = state.user.role === 'teacher' ? 'teacher-dashboard' : 'home';
-    navigate(hash || defaultRoute, {}, true);
-  }
-
-  async function navigate(route, data = {}, force = false) {
-    stopTimers();
-    state.route = route;
-    state.routeData = data;
-    if (!force && location.hash !== `#${route}`) history.pushState(null, '', `#${route}`);
-    renderNavigation();
-    $('#sidebar').classList.remove('open');
-    $('#menu-backdrop').classList.remove('active');
-    loading();
+  async function restoreSession() {
+    if (!state.session) return false;
     try {
-      const handlers = state.user.role === 'teacher' ? teacherRoutes : studentRoutes;
-      if (!handlers[route]) throw new Error('Tela não encontrada.');
-      await handlers[route](data);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      if (state.mode === 'server') {
+        const payload = await api('/api/me');
+        state.user = payload.user;
+      } else {
+        const saved = JSON.parse(state.session);
+        const db = getDemoDB();
+        const user = db.users.find((item) => item.id === saved.userId && !item.blocked);
+        if (!user) throw new Error('Sessão inválida');
+        if (user.role === 'student' && saved.accessToken !== user.access_token) throw new Error('Link alterado');
+        state.user = { ...user };
+      }
+      await loadDashboard();
+      showPlatform();
+      return true;
+    } catch {
+      clearSession();
+      return false;
+    }
+  }
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    const email = elements.loginEmail.value.trim().toLowerCase();
+    const password = elements.loginPassword.value;
+    elements.loginFeedback.textContent = '';
+    const button = elements.loginForm.querySelector('button[type="submit"]');
+    button.disabled = true;
+    button.querySelector('span:first-child').textContent = 'Entrando...';
+    try {
+      if (state.mode === 'server') {
+        const payload = await api('/api/login', {
+          method: 'POST',
+          body: JSON.stringify({ email, password, accessToken: state.accessToken })
+        });
+        state.session = payload.session;
+        state.user = payload.user;
+        localStorage.setItem(STORAGE.session, state.session);
+      } else {
+        const db = getDemoDB();
+        const user = db.users.find((item) => item.email.toLowerCase() === email);
+        if (!user || user.password !== password) throw new Error('E-mail ou senha incorretos.');
+        if (user.blocked) throw new Error('Este acesso foi bloqueado pelo professor.');
+        if (user.role === 'student' && (!state.accessToken || user.access_token !== state.accessToken)) {
+          throw new Error('O aluno precisa entrar pelo link individual enviado pelo professor.');
+        }
+        if (user.role === 'teacher' && state.accessToken) throw new Error('Este é um link individual de aluno.');
+        state.user = { ...user };
+        state.session = JSON.stringify({ userId: user.id, accessToken: user.access_token || '', tabId: state.tabId, createdAt: Date.now() });
+        localStorage.setItem(STORAGE.session, state.session);
+        enforceDemoSingleSession();
+      }
+      await loadDashboard();
+      showPlatform();
+      toast('Acesso liberado', `Bem-vindo, ${state.user.name.split(' ')[0]}!`);
     } catch (error) {
-      console.error(error);
-      if (error.status === 401) {
-        state.user = null;
-        showLogin(state.token);
-        toast(error.message, 'error');
+      elements.loginFeedback.textContent = error.message;
+    } finally {
+      button.disabled = false;
+      button.querySelector('span:first-child').textContent = 'Entrar na plataforma';
+    }
+  }
+
+  function enforceDemoSingleSession() {
+    if (state.mode !== 'demo' || !state.user) return;
+    localStorage.setItem(STORAGE.tab, JSON.stringify({ userId: state.user.id, tabId: state.tabId, at: Date.now() }));
+  }
+
+  function setupSessionWatcher() {
+    window.addEventListener('storage', (event) => {
+      if (event.key === STORAGE.tab && state.mode === 'demo' && state.user) {
+        try {
+          const active = JSON.parse(event.newValue);
+          if (active.userId === state.user.id && active.tabId !== state.tabId) {
+            clearSession();
+            showLogin();
+            toast('Sessão encerrada', 'A conta foi acessada em outra aba ou dispositivo.', 'error');
+          }
+        } catch {
+          // Ignora dados inválidos.
+        }
+      }
+    });
+  }
+
+  async function loadDashboard() {
+    if (!state.user) return;
+    if (state.mode === 'server') {
+      state.data = state.user.role === 'teacher'
+        ? await api('/api/teacher/dashboard')
+        : await api('/api/student/dashboard');
+    } else {
+      state.data = state.user.role === 'teacher'
+        ? demoTeacherDashboard()
+        : demoStudentDashboard(state.user.id);
+    }
+  }
+
+  function clearSession() {
+    state.session = '';
+    state.user = null;
+    state.data = null;
+    state.page = '';
+    localStorage.removeItem(STORAGE.session);
+    stopLiveTimers();
+  }
+
+  async function logout() {
+    try {
+      if (state.mode === 'server' && state.session) await api('/api/logout', { method: 'POST', body: '{}' });
+    } catch {
+      // A sessão pode já ter expirado.
+    }
+    clearSession();
+    showLogin();
+  }
+
+  function showLogin() {
+    document.body.classList.remove('has-watermark', 'protected-content', 'sidebar-open');
+    elements.platformView.classList.add('is-hidden');
+    elements.loginView.classList.remove('is-hidden');
+    elements.loginPassword.value = '';
+    elements.loginFeedback.textContent = '';
+    validateAccessToken();
+  }
+
+  function showPlatform() {
+    elements.loginView.classList.add('is-hidden');
+    elements.platformView.classList.remove('is-hidden');
+    renderShell();
+    const defaultPage = state.user.role === 'teacher' ? 'teacher-dashboard' : 'dashboard';
+    navigate(defaultPage);
+  }
+
+  function renderShell() {
+    const navItems = navigation[state.user.role];
+    elements.mainNav.innerHTML = navItems.map(([page, icon, label]) => `
+      <button class="nav-button" type="button" data-page="${page}">
+        <span class="nav-icon">${icon}</span><span>${escapeHTML(label)}</span>
+      </button>
+    `).join('');
+    elements.sidebarUser.innerHTML = `
+      <span class="avatar">${escapeHTML(state.user.avatar || initials(state.user.name))}</span>
+      <div><strong>${escapeHTML(state.user.name)}</strong><span>${state.user.role === 'teacher' ? 'Professor' : 'Aluno'}</span></div>
+    `;
+    elements.topbarUser.innerHTML = `
+      <span class="avatar">${escapeHTML(state.user.avatar || initials(state.user.name))}</span>
+      <div><strong>${escapeHTML(state.user.name)}</strong><span>${state.user.role === 'teacher' ? 'Professor' : 'Aluno'}</span></div>
+    `;
+    const noticeCount = state.user.role === 'teacher'
+      ? state.data.notices?.length || 0
+      : state.data.notices?.length || 0;
+    elements.noticeCount.textContent = String(Math.min(99, noticeCount));
+    applyProtection();
+  }
+
+  function applyProtection() {
+    const enabled = state.user?.role === 'student' && state.data?.settings?.content_protection;
+    document.body.classList.toggle('has-watermark', Boolean(enabled));
+    document.body.classList.toggle('protected-content', Boolean(enabled));
+    if (enabled) {
+      const text = `${state.user.name} • ${state.user.email}`;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="370" height="170"><text x="10" y="90" fill="#173c2a" font-size="15" font-family="Arial">${text.replaceAll('&', '&amp;').replaceAll('<', '&lt;')}</text></svg>`;
+      elements.watermark.style.backgroundImage = `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+    } else {
+      elements.watermark.style.backgroundImage = '';
+    }
+  }
+
+  function navigate(page, options = {}) {
+    if (!state.user) return;
+    if (!navigation[state.user.role].some(([itemPage]) => itemPage === page)) {
+      page = state.user.role === 'teacher' ? 'teacher-dashboard' : 'dashboard';
+    }
+    state.page = page;
+    if (options.unitId) state.activeUnitId = Number(options.unitId);
+    if (options.lessonId) state.activeLessonId = Number(options.lessonId);
+    if (options.activityId) state.activeActivityId = Number(options.activityId);
+    if (options.studentId) state.activeReportStudentId = Number(options.studentId);
+    stopLiveTimers();
+    $$('.nav-button', elements.mainNav).forEach((button) => button.classList.toggle('is-active', button.dataset.page === page));
+    const [title, kicker] = pageMeta[page] || ['Vanguard', 'ENGLISH SCHOOL'];
+    elements.pageTitle.textContent = title;
+    elements.pageKicker.textContent = kicker;
+    document.body.classList.remove('sidebar-open');
+    renderPage();
+    elements.content.focus({ preventScroll: true });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function renderPage() {
+    const renderers = {
+      dashboard: renderStudentDashboard,
+      weekly: renderWeeklyActivities,
+      units: renderUnits,
+      writing: () => renderActivityPage('writing'),
+      pronunciation: () => renderActivityPage('pronunciation'),
+      live: renderLiveClass,
+      progress: renderProgress,
+      notices: renderNotices,
+      profile: renderProfile,
+      'teacher-dashboard': renderTeacherDashboard,
+      students: renderStudents,
+      builder: renderBuilder,
+      attendance: renderAttendance,
+      reports: renderReports,
+      settings: renderSettings
+    };
+    loadingPage();
+    requestAnimationFrame(() => renderers[state.page]?.());
+  }
+
+  function pageHeader({ eyebrow, title, description, actions = '' }) {
+    return `
+      <header class="page-header">
+        <div class="page-header__copy">
+          <span class="overline overline--green">${escapeHTML(eyebrow)}</span>
+          <h1>${escapeHTML(title)}</h1>
+          <p>${escapeHTML(description)}</p>
+        </div>
+        ${actions ? `<div class="page-actions">${actions}</div>` : ''}
+      </header>
+    `;
+  }
+
+  function renderStudentDashboard() {
+    const { student, summary, activities, notices, liveClass } = state.data;
+    const pending = activities.filter((activity) => !activity.attempt_count).slice(0, 4);
+    elements.content.innerHTML = `
+      <section class="student-hero">
+        <div class="student-hero__copy">
+          <span class="overline">SUA SEMANA NA VANGUARD</span>
+          <h1>Hello, ${escapeHTML(student.name.split(' ')[0])}.</h1>
+          <p>Continue de onde parou. Você tem ${pending.length} ${pending.length === 1 ? 'atividade pendente' : 'atividades pendentes'} e uma aula ao vivo para praticar com a turma.</p>
+        </div>
+        <div class="student-hero__side">
+          <div class="progress-ring" style="--value:${summary.progress}"><strong>${summary.progress}%</strong></div>
+          <div class="hero-metric"><small>Progresso geral</small><strong>${summary.completed} de ${summary.total} atividades</strong></div>
+        </div>
+      </section>
+
+      <div class="stats-grid">
+        ${statCard('Atividades da semana', `${summary.completed}/${summary.total}`, 'concluídas')}
+        ${statCard('Próxima aula', liveClass ? relativeDate(liveClass.starts_at) : '—', liveClass ? formatDate(liveClass.starts_at) : 'Sem aula marcada', true)}
+        ${statCard('Progresso', `${summary.progress}%`, 'do curso')}
+        ${statCard('Nota média', `${summary.grade}`, 'de 10')}
+        ${statCard('Faltas', `${summary.absences}`, summary.absences ? 'requer atenção' : 'nenhuma pendência', summary.absences > 0)}
+      </div>
+
+      <div class="dashboard-grid">
+        <section class="card card--pad">
+          <div class="card-header"><div><h3>Atividades da semana</h3><p>Conclua o conjunto obrigatório até o prazo.</p></div><button class="btn btn--quiet" data-page="weekly">Ver todas</button></div>
+          <div class="list">
+            ${pending.length ? pending.map(activityListItem).join('') : emptyState('✓', 'Semana concluída', 'Você terminou todas as atividades obrigatórias desta semana.')}
+          </div>
+        </section>
+
+        <aside class="grid">
+          ${liveClass ? `
+            <section class="card card--dark card--pad">
+              <div class="card-header"><div><h3>Próxima aula ao vivo</h3><p style="color:rgba(255,255,255,.58)">${formatDate(liveClass.starts_at)}</p></div>${statusBadge(liveClass.status === 'live' ? 'Ao vivo' : 'Agendada', liveClass.status === 'live' ? 'danger' : 'orange')}</div>
+              <h4 style="margin:0 0 18px;font-family:Georgia,serif;font-size:1.35rem;font-weight:500">${escapeHTML(liveClass.title)}</h4>
+              <button class="btn btn--orange" data-page="live">Abrir sala</button>
+            </section>
+          ` : ''}
+          <section class="card card--pad">
+            <div class="card-header"><div><h3>Aviso recente</h3><p>Mensagem do professor</p></div><button class="btn btn--quiet" data-page="notices">Todos</button></div>
+            ${notices[0] ? `<strong>${escapeHTML(notices[0].title)}</strong><p style="margin:8px 0 0;color:var(--muted);font-size:.8rem;line-height:1.55">${escapeHTML(notices[0].message)}</p>` : '<p class="muted">Nenhum aviso.</p>'}
+          </section>
+        </aside>
+      </div>
+    `;
+  }
+
+  function statCard(label, value, caption, orange = false) {
+    return `<article class="stat-card ${orange ? 'stat-card--orange' : ''}"><small>${escapeHTML(label)}</small><strong>${escapeHTML(value)}</strong><span>${escapeHTML(caption)}</span></article>`;
+  }
+
+  function activityListItem(activity) {
+    const completed = Number(activity.attempt_count || 0) > 0;
+    return `
+      <article class="list-item">
+        <div class="list-item__main">
+          <span class="list-item__icon">${activityIcon(activity.type)}</span>
+          <div class="list-item__copy"><strong>${escapeHTML(activity.title)}</strong><span>${escapeHTML(activity.lesson_title)} · ${formatDate(activity.due_at)}</span></div>
+        </div>
+        <div class="list-item__side">
+          ${completed ? statusBadge('Entregue', 'success') : statusBadge('Pendente', 'warning')}
+          <button class="btn btn--quiet" data-open-activity="${activity.id}">${completed ? 'Refazer' : 'Começar'}</button>
+        </div>
+      </article>
+    `;
+  }
+
+  function emptyState(icon, title, message) {
+    return `<div class="empty-state"><div><span class="empty-state__icon">${icon}</span><h3>${escapeHTML(title)}</h3><p>${escapeHTML(message)}</p></div></div>`;
+  }
+
+  function renderWeeklyActivities() {
+    const activities = state.data.activities;
+    const completed = activities.filter((activity) => activity.attempt_count > 0).length;
+    const percent = activities.length ? Math.round((completed / activities.length) * 100) : 0;
+    const minimum = state.data.settings.weekly_minimum_percent;
+    elements.content.innerHTML = `
+      ${pageHeader({
+        eyebrow: 'PRESENÇA ONLINE SEMANAL',
+        title: 'Sua semana de estudos',
+        description: `Conclua pelo menos ${minimum}% das atividades obrigatórias até o prazo. A falta online é registrada uma única vez pelo conjunto da semana.`
+      })}
+      <section class="card card--pad" style="margin-bottom:20px">
+        <div class="card-header"><div><h3>Progresso desta semana</h3><p>${completed} de ${activities.length} atividades entregues</p></div>${statusBadge(percent >= minimum ? 'Presença garantida' : `Mínimo: ${minimum}%`, percent >= minimum ? 'success' : 'warning')}</div>
+        <div class="progress-bar"><span style="width:${percent}%"></span></div>
+        <p style="margin:10px 0 0;color:var(--muted);font-size:.77rem">Você concluiu ${percent}%.</p>
+      </section>
+      <div class="activity-grid">${activities.map(activityCard).join('')}</div>
+    `;
+  }
+
+  function activityCard(activity) {
+    const completed = Number(activity.attempt_count || 0) > 0;
+    return `
+      <article class="activity-card">
+        <div class="activity-card__top">
+          <div class="list-item__main"><span class="type-icon">${activityIcon(activity.type)}</span><div><span class="badge">${activityTypeLabel(activity.type)}</span><h3>${escapeHTML(activity.title)}</h3><p>${escapeHTML(activity.unit_title)} · ${escapeHTML(activity.lesson_title)}</p></div></div>
+          ${completed ? statusBadge('Entregue', 'success') : statusBadge('Pendente', 'warning')}
+        </div>
+        <p>${escapeHTML(activity.prompt)}</p>
+        <div class="activity-meta"><span>Prazo: ${formatDate(activity.due_at)}</span><span>•</span><span>${activity.points} pontos</span><span>•</span><span>${activity.required ? 'Obrigatória' : 'Opcional'}</span></div>
+        <footer class="activity-card__footer"><span class="muted">${completed ? `Melhor nota: ${activity.best_score ?? 0}` : 'Ainda não iniciada'}</span><button class="btn btn--primary" data-open-activity="${activity.id}">${completed ? 'Refazer' : 'Responder'}</button></footer>
+      </article>
+    `;
+  }
+
+  function renderUnits() {
+    const units = state.data.units;
+    if (state.activeLessonId) {
+      const found = findLesson(state.activeLessonId);
+      if (found) return renderLesson(found.unit, found.lesson);
+    }
+    elements.content.innerHTML = `
+      ${pageHeader({ eyebrow: 'CONTEÚDO ORGANIZADO', title: 'Unidades do curso', description: 'Cada unidade reúne explicações, exemplos, videoaulas, áudios e atividades práticas.' })}
+      <div class="unit-grid">
+        ${units.map((unit, index) => `
+          <article class="unit-card">
+            <span class="unit-card__number">UNIT ${String(index + 1).padStart(2, '0')}</span>
+            <h3>${escapeHTML(unit.title)}</h3>
+            <p>${escapeHTML(unit.description)}</p>
+            <footer class="unit-card__footer"><span>${unit.lessons.length} ${unit.lessons.length === 1 ? 'aula' : 'aulas'}</span><button class="btn btn--quiet" data-open-unit="${unit.id}">Abrir unidade</button></footer>
+          </article>
+        `).join('')}
+      </div>
+      ${state.activeUnitId ? renderUnitLessons(state.activeUnitId) : ''}
+    `;
+  }
+
+  function renderUnitLessons(unitId) {
+    const unit = state.data.units.find((item) => item.id === Number(unitId));
+    if (!unit) return '';
+    return `
+      <section class="section" id="unit-lessons">
+        <div class="section-heading"><div><h3>${escapeHTML(unit.title)}</h3><p>${escapeHTML(unit.description)}</p></div></div>
+        <div class="list">
+          ${unit.lessons.map((lesson, index) => `
+            <article class="list-item">
+              <div class="list-item__main"><span class="list-item__icon">${index + 1}</span><div class="list-item__copy"><strong>${escapeHTML(lesson.title)}</strong><span>${escapeHTML(lesson.summary)}</span></div></div>
+              <div class="list-item__side">${statusBadge(`${lesson.activities.length} atividades`, 'muted')}<button class="btn btn--primary" data-open-lesson="${lesson.id}">Estudar</button></div>
+            </article>
+          `).join('') || emptyState('▤', 'Unidade sem aulas', 'O professor ainda não publicou aulas nesta unidade.')}
+        </div>
+      </section>
+    `;
+  }
+
+  function findLesson(lessonId) {
+    for (const unit of state.data.units) {
+      const lesson = unit.lessons.find((item) => item.id === Number(lessonId));
+      if (lesson) return { unit, lesson };
+    }
+    return null;
+  }
+
+  function findActivity(activityId) {
+    for (const unit of state.data.units) {
+      for (const lesson of unit.lessons) {
+        const activity = lesson.activities.find((item) => item.id === Number(activityId));
+        if (activity) return { unit, lesson, activity };
+      }
+    }
+    return null;
+  }
+
+  function renderLesson(unit, lesson) {
+    elements.content.innerHTML = `
+      ${pageHeader({
+        eyebrow: unit.title,
+        title: lesson.title,
+        description: lesson.summary,
+        actions: '<button class="btn btn--outline" data-back-units>← Voltar às unidades</button>'
+      })}
+      <div class="lesson-layout">
+        <div class="lesson-main">
+          ${lesson.video_url ? `<div class="media-frame"><iframe src="${escapeHTML(lesson.video_url)}" title="Videoaula: ${escapeHTML(lesson.title)}" allowfullscreen loading="lazy"></iframe></div>` : ''}
+          <article class="prose">
+            <h2>Explicação</h2>
+            <p>${escapeHTML(lesson.written_content)}</p>
+            ${lesson.examples?.length ? `<h3>Exemplos</h3><div class="example-list">${lesson.examples.map((example) => `<div class="example-item">${escapeHTML(example)}</div>`).join('')}</div>` : ''}
+          </article>
+          <section class="card card--pad">
+            <div class="card-header"><div><h3>Atividades desta aula</h3><p>Pratique o conteúdo antes de avançar.</p></div></div>
+            <div class="list">${lesson.activities.map((activity) => `
+              <article class="list-item">
+                <div class="list-item__main"><span class="list-item__icon">${activityIcon(activity.type)}</span><div class="list-item__copy"><strong>${escapeHTML(activity.title)}</strong><span>${activityTypeLabel(activity.type)} · ${activity.points} pontos</span></div></div>
+                <button class="btn btn--primary" data-open-activity="${activity.id}">Responder</button>
+              </article>
+            `).join('') || emptyState('✓', 'Sem atividades', 'Esta aula ainda não possui atividades.')}</div>
+          </section>
+        </div>
+        <aside class="lesson-sidebar">
+          <section class="card card--pad">
+            <div class="card-header"><div><h4>Aulas da unidade</h4><p>Continue na sequência.</p></div></div>
+            <div class="list">${unit.lessons.map((item, index) => `<button class="lesson-nav-button ${item.id === lesson.id ? 'is-active' : ''}" data-open-lesson="${item.id}"><span class="list-item__icon">${index + 1}</span><span><strong>${escapeHTML(item.title)}</strong><small>${item.activities.length} atividades</small></span></button>`).join('')}</div>
+          </section>
+          <section class="card card--accent card--pad"><div class="card-header"><div><h4>Dica de estudo</h4></div></div><p style="margin:0;color:var(--muted);font-size:.8rem;line-height:1.6">Assista ao vídeo, leia os exemplos em voz alta e depois faça as atividades sem consultar a explicação.</p></section>
+        </aside>
+      </div>
+    `;
+  }
+
+  function renderActivityPage(preferredType = '') {
+    let found = state.activeActivityId ? findActivity(state.activeActivityId) : null;
+    if (!found) {
+      const activity = state.data.activities.find((item) => item.type === preferredType) || state.data.activities[0];
+      found = activity ? findActivity(activity.id) : null;
+    }
+    if (!found) {
+      elements.content.innerHTML = emptyState('✎', 'Atividade indisponível', 'O professor ainda não publicou uma atividade deste tipo.');
+      return;
+    }
+    state.activeActivityId = found.activity.id;
+    const { activity, lesson, unit } = found;
+    const input = renderActivityInput(activity);
+    elements.content.innerHTML = `
+      <div class="exercise-shell">
+        <article class="exercise-card">
+          <div class="exercise-top">
+            <div><span class="badge">${activityTypeLabel(activity.type)}</span><h1>${escapeHTML(activity.title)}</h1></div>
+            ${statusBadge(`${activity.points} pontos`, 'orange')}
+          </div>
+          <div class="activity-meta"><span>${escapeHTML(unit.title)}</span><span>•</span><span>${escapeHTML(lesson.title)}</span><span>•</span><span>Prazo: ${formatDate(activity.due_at)}</span></div>
+          <div class="prompt-box">${escapeHTML(activity.prompt)}</div>
+          <form id="activity-form" data-activity-id="${activity.id}" data-activity-type="${activity.type}">
+            ${input}
+            <div id="activity-result"></div>
+            <div class="exercise-actions"><button class="btn btn--outline" type="button" data-page="weekly">Voltar</button><button class="btn btn--primary btn--large" type="submit">Enviar resposta <span>→</span></button></div>
+          </form>
+        </article>
+      </div>
+    `;
+    if (activity.type === 'pronunciation') setupPronunciationControls();
+  }
+
+  function renderActivityInput(activity) {
+    if (activity.type === 'multiple_choice') {
+      return `<div class="option-list">${activity.options.map((option) => `<button class="option-button" type="button" data-select-option="${escapeHTML(option)}">${escapeHTML(option)}</button>`).join('')}</div><input id="activity-answer" type="hidden">`;
+    }
+    if (activity.type === 'fill_blank') {
+      return `<label class="field"><span>Sua resposta</span><input id="activity-answer" type="text" autocomplete="off" placeholder="Complete a frase" required></label>`;
+    }
+    if (activity.type === 'writing') {
+      return `<label class="field"><span>Escreva em inglês</span><textarea id="activity-answer" placeholder="Digite sua resposta com uma frase completa..." required></textarea></label>`;
+    }
+    if (activity.type === 'listening') {
+      return `<div class="card card--flat card--pad" style="margin-bottom:16px"><button class="btn btn--orange" type="button" data-speak="${escapeHTML(activity.correct_answer)}">♫ Ouvir a frase</button><p class="muted" style="font-size:.76rem;margin:12px 0 0">Você pode ouvir novamente antes de responder.</p></div><label class="field"><span>O que você ouviu?</span><input id="activity-answer" type="text" autocomplete="off" placeholder="Escreva a frase em inglês" required></label>`;
+    }
+    return `
+      <div class="pronunciation-panel">
+        <button id="mic-button" class="mic-button" type="button" aria-label="Começar gravação"></button>
+        <div><strong id="mic-title">Toque no microfone para começar</strong><p id="mic-copy" class="muted" style="margin:6px 0 0;font-size:.8rem">Leia a frase em voz alta. O áudio ficará disponível para o professor.</p></div>
+        <div id="transcript-box" class="transcript-box">A transcrição aparecerá aqui.</div>
+        <audio id="audio-preview" class="is-hidden" controls></audio>
+      </div>
+      <input id="activity-answer" type="hidden">
+    `;
+  }
+
+  function normalizeAnswer(value) {
+    return String(value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9' ]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function answerSimilarity(expected, actual) {
+    const a = normalizeAnswer(expected);
+    const b = normalizeAnswer(actual);
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    const words = a.split(' ');
+    const actualWords = new Set(b.split(' '));
+    return words.filter((word) => actualWords.has(word)).length / words.length;
+  }
+
+  async function submitActivity(form) {
+    const activityId = Number(form.dataset.activityId);
+    const type = form.dataset.activityType;
+    const found = findActivity(activityId);
+    if (!found) return;
+    const answerText = $('#activity-answer')?.value?.trim() || '';
+    if (!answerText && type !== 'pronunciation') {
+      toast('Preencha sua resposta', 'Escreva ou escolha uma opção antes de enviar.', 'error');
+      return;
+    }
+    if (type === 'pronunciation' && !state.transcript && !state.audioBlob) {
+      toast('Grave sua pronúncia', 'Use o microfone antes de enviar.', 'error');
+      return;
+    }
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = 'Enviando...';
+    try {
+      let audioUrl = state.audioUrl;
+      if (state.mode === 'server' && state.audioBlob && !audioUrl) audioUrl = await uploadBlob(state.audioBlob, 'pronuncia.webm');
+      let result;
+      if (state.mode === 'server') {
+        result = await api('/api/student/attempts', {
+          method: 'POST',
+          body: JSON.stringify({ activityId, answerText, transcript: state.transcript, audioUrl })
+        });
+        state.data = result.dashboard;
+      } else {
+        result = demoSubmitAttempt(found.activity, answerText, state.transcript, audioUrl);
+        state.data = demoStudentDashboard(state.user.id);
+      }
+      const attempt = result.attempt;
+      $('#activity-result').innerHTML = `<div class="exercise-result ${attempt.correct ? '' : 'is-error'}"><strong>${attempt.correct ? 'Muito bem!' : 'Vamos revisar'}</strong><p>${escapeHTML(attempt.feedback)}</p>${attempt.expected ? `<p><b>Resposta esperada:</b> ${escapeHTML(attempt.expected)}</p>` : ''}<p><b>Nota:</b> ${attempt.score}</p></div>`;
+      renderShell();
+      toast('Resposta registrada', attempt.correct ? 'Atividade corrigida com sucesso.' : 'Leia a explicação e tente novamente.');
+    } catch (error) {
+      toast('Não foi possível enviar', error.message, 'error');
+    } finally {
+      submit.disabled = false;
+      submit.innerHTML = 'Enviar resposta <span>→</span>';
+    }
+  }
+
+  function demoSubmitAttempt(activity, answerText, transcript, audioUrl) {
+    const db = getDemoDB();
+    const response = transcript || answerText;
+    let score = 0;
+    let correct = false;
+    let feedback = activity.explanation || 'Resposta registrada.';
+    if (activity.type === 'writing' && !activity.correct_answer) {
+      score = clamp(Math.round(response.split(/\s+/).filter(Boolean).length / 2), 4, 10);
+      correct = response.length >= 8;
+      feedback = correct ? 'Resposta enviada. O professor poderá revisar sua escrita.' : 'Escreva uma frase mais completa.';
+    } else if (activity.type === 'pronunciation') {
+      const match = answerSimilarity(activity.correct_answer, response);
+      score = Math.round(match * 100) / 10;
+      correct = match >= .7;
+      feedback = correct ? 'Boa pronúncia! A frase reconhecida ficou próxima do modelo.' : activity.explanation;
+    } else {
+      const match = answerSimilarity(activity.correct_answer, response);
+      correct = match >= .92;
+      score = correct ? Number(activity.points || 10) : Math.round(match * Number(activity.points || 10) * 10) / 10;
+      feedback = correct ? 'Resposta correta!' : activity.explanation;
+    }
+    const attempt = { id: db.counters.attempt++, activity_id: activity.id, student_id: state.user.id, answer_text: answerText, transcript, audio_url: audioUrl || '', score, correct, feedback, created_at: new Date().toISOString() };
+    db.attempts.push(attempt);
+    saveDemoDB(db);
+    return { attempt: { ...attempt, expected: correct ? undefined : activity.correct_answer } };
+  }
+
+  async function uploadBlob(blob, filename) {
+    const data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error || new Error('Falha ao ler o áudio.'));
+      reader.readAsDataURL(blob);
+    });
+    const payload = await api('/api/upload', {
+      method: 'POST',
+      body: JSON.stringify({ name: filename, type: blob.type || 'audio/webm', data })
+    });
+    return payload.file.url;
+  }
+
+  function setupPronunciationControls() {
+    state.audioBlob = null;
+    state.audioUrl = '';
+    state.transcript = '';
+    $('#mic-button')?.addEventListener('click', toggleRecording);
+  }
+
+  async function toggleRecording() {
+    if (state.mediaRecorder?.state === 'recording') {
+      state.mediaRecorder.stop();
+      state.recognition?.stop?.();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      toast('Microfone indisponível', 'Use Chrome ou Edge em HTTPS ou localhost.', 'error');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.audioChunks = [];
+      state.mediaRecorder = new MediaRecorder(stream);
+      state.mediaRecorder.addEventListener('dataavailable', (event) => {
+        if (event.data.size) state.audioChunks.push(event.data);
+      });
+      state.mediaRecorder.addEventListener('stop', () => {
+        state.audioBlob = new Blob(state.audioChunks, { type: state.mediaRecorder.mimeType || 'audio/webm' });
+        const preview = $('#audio-preview');
+        preview.src = URL.createObjectURL(state.audioBlob);
+        preview.classList.remove('is-hidden');
+        $('#mic-button').classList.remove('is-recording');
+        $('#mic-title').textContent = 'Gravação concluída';
+        $('#mic-copy').textContent = 'Ouça o áudio ou grave novamente antes de enviar.';
+        stream.getTracks().forEach((track) => track.stop());
+        $('#activity-answer').value = state.transcript;
+      });
+      setupSpeechRecognition();
+      state.mediaRecorder.start();
+      state.recognition?.start?.();
+      $('#mic-button').classList.add('is-recording');
+      $('#mic-title').textContent = 'Gravando... toque para parar';
+      $('#mic-copy').textContent = 'Leia a frase com naturalidade.';
+    } catch (error) {
+      toast('Permissão do microfone negada', error.message, 'error');
+    }
+  }
+
+  function setupSpeechRecognition() {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      state.recognition = null;
+      $('#transcript-box').textContent = 'Seu navegador gravará o áudio, mas não oferece transcrição automática.';
+      return;
+    }
+    state.recognition = new Recognition();
+    state.recognition.lang = 'en-US';
+    state.recognition.continuous = true;
+    state.recognition.interimResults = true;
+    state.recognition.onresult = (event) => {
+      let text = '';
+      for (let index = event.resultIndex; index < event.results.length; index += 1) text += event.results[index][0].transcript;
+      state.transcript = text.trim();
+      $('#transcript-box').textContent = state.transcript || 'Ouvindo...';
+      $('#activity-answer').value = state.transcript;
+    };
+  }
+
+  function renderProgress() {
+    const { summary, attempts, absences } = state.data;
+    elements.content.innerHTML = `
+      ${pageHeader({ eyebrow: 'ACOMPANHAMENTO INDIVIDUAL', title: 'Seu desempenho', description: 'Veja seu progresso, suas notas, tentativas e o histórico de faltas.' })}
+      <div class="stats-grid">
+        ${statCard('Progresso geral', `${summary.progress}%`, `${summary.completed}/${summary.total} atividades`)}
+        ${statCard('Nota média', `${summary.grade}`, 'de 10')}
+        ${statCard('Concluídas', `${summary.completed}`, 'atividades')}
+        ${statCard('Pendentes', `${Math.max(0, summary.total - summary.completed)}`, 'atividades')}
+        ${statCard('Faltas', `${summary.absences}`, 'não justificadas', summary.absences > 0)}
+      </div>
+      <div class="grid grid--2">
+        <section class="card card--pad">
+          <div class="card-header"><div><h3>Últimas tentativas</h3><p>Resultados enviados pela plataforma.</p></div></div>
+          <div class="list">${attempts.length ? attempts.slice(0, 10).map((attempt) => `
+            <article class="list-item"><div class="list-item__main"><span class="list-item__icon">${attempt.correct ? '✓' : '!'}</span><div class="list-item__copy"><strong>${escapeHTML(attempt.activity_title)}</strong><span>${formatDate(attempt.created_at)} · ${escapeHTML(attempt.feedback)}</span></div></div><div class="list-item__side">${statusBadge(`Nota ${attempt.score}`, attempt.correct ? 'success' : 'warning')}</div></article>
+          `).join('') : emptyState('↗', 'Nenhuma tentativa', 'Faça uma atividade para acompanhar suas notas.')}</div>
+        </section>
+        <section class="card card--pad">
+          <div class="card-header"><div><h3>Presenças e faltas</h3><p>A falta online vale pelo conjunto semanal.</p></div></div>
+          <div class="list">${absences.length ? absences.map((absence) => `
+            <article class="list-item"><div class="list-item__main"><span class="list-item__icon">${absence.kind === 'live' ? '●' : '✓'}</span><div class="list-item__copy"><strong>${absence.kind === 'live' ? 'Falta na aula ao vivo' : 'Falta online semanal'}</strong><span>${escapeHTML(absence.reason || absence.reference_key)} · ${formatDate(absence.created_at, false)}</span></div></div>${statusBadge(absence.justified ? 'Justificada' : 'Registrada', absence.justified ? 'success' : 'danger')}</article>
+          `).join('') : emptyState('✓', 'Nenhuma falta', 'Seu histórico de presença está em dia.')}</div>
+        </section>
+      </div>
+    `;
+  }
+
+  function renderNotices() {
+    const notices = state.data.notices || [];
+    const teacherActions = state.user.role === 'teacher'
+      ? '<button class="btn btn--primary" data-action="new-notice">＋ Novo aviso</button>'
+      : '';
+    elements.content.innerHTML = `
+      ${pageHeader({ eyebrow: 'COMUNICAÇÃO DIRETA', title: 'Avisos do curso', description: state.user.role === 'teacher' ? 'Envie mensagens para toda a turma ou para um aluno específico.' : 'Acompanhe recados, mudanças de prazo e orientações do professor.', actions: teacherActions })}
+      <div class="grid">
+        ${notices.length ? notices.map((notice) => `
+          <article class="notice-card">
+            <span class="notice-card__icon">!</span>
+            <div><h3>${escapeHTML(notice.title)}</h3><p>${escapeHTML(notice.message)}</p>${state.user.role === 'teacher' ? `<span class="badge badge--muted" style="margin-top:10px">${notice.student_name ? `Para ${escapeHTML(notice.student_name)}` : 'Para toda a turma'}</span>` : ''}</div>
+            <time>${formatDate(notice.created_at)}</time>
+          </article>
+        `).join('') : emptyState('!', 'Nenhum aviso', 'As mensagens do professor aparecerão aqui.')}
+      </div>
+    `;
+  }
+
+  function renderProfile() {
+    const user = state.data.student || state.user;
+    elements.content.innerHTML = `
+      ${pageHeader({ eyebrow: 'SUA CONTA', title: 'Perfil do aluno', description: 'Confira os dados vinculados ao seu acesso individual.' })}
+      <section class="card profile-card">
+        <div class="profile-avatar">${escapeHTML(user.avatar || initials(user.name))}</div>
+        <div class="profile-info">
+          <h2>${escapeHTML(user.name)}</h2><p>${escapeHTML(user.email)}</p>
+          <div class="detail-grid">
+            <div class="detail-item"><small>Tipo de acesso</small><strong>Aluno</strong></div>
+            <div class="detail-item"><small>Status</small><strong class="text-success">Ativo</strong></div>
+            <div class="detail-item"><small>Curso</small><strong>${escapeHTML(state.data.settings.course_name)}</strong></div>
+            <div class="detail-item"><small>Proteção</small><strong>${state.data.settings.content_protection ? 'Marca d’água ativa' : 'Desativada'}</strong></div>
+          </div>
+        </div>
+      </section>
+      <section class="card card--pad section">
+        <div class="card-header"><div><h3>Segurança do acesso</h3><p>Este link foi criado exclusivamente para seu e-mail.</p></div>${statusBadge('Sessão única', 'success')}</div>
+        <p style="margin:0;color:var(--muted);font-size:.82rem;line-height:1.65">Ao entrar em outro dispositivo, a sessão anterior é encerrada. Não compartilhe seu link, senha ou gravações das aulas.</p>
+      </section>
+    `;
+  }
+
+  function renderTeacherDashboard() {
+    const { summary, reports, attempts, liveClasses } = state.data;
+    const live = liveClasses.find((item) => item.status !== 'finished') || liveClasses[0];
+    elements.content.innerHTML = `
+      ${pageHeader({
+        eyebrow: 'PAINEL DO PROFESSOR',
+        title: `Olá, ${state.user.name.split(' ')[0]}.`,
+        description: 'Acompanhe a turma, publique conteúdos e veja quem precisa de atenção.',
+        actions: '<button class="btn btn--outline" data-action="new-notice">Enviar aviso</button><button class="btn btn--primary" data-action="new-activity">＋ Nova atividade</button>'
+      })}
+      <div class="stats-grid">
+        ${statCard('Alunos cadastrados', `${summary.students}`, `${summary.activeStudents} ativos`)}
+        ${statCard('Unidades', `${summary.units}`, 'publicadas')}
+        ${statCard('Atividades', `${summary.activities}`, 'no curso')}
+        ${statCard('Abaixo do mínimo', `${summary.pending}`, 'alunos')}
+        ${statCard('Próxima aula', live ? relativeDate(live.starts_at) : '—', live ? formatDate(live.starts_at) : 'Não agendada', true)}
+      </div>
+      <div class="dashboard-grid">
+        <section class="card card--pad">
+          <div class="card-header"><div><h3>Progresso da turma</h3><p>Visão rápida de cada aluno.</p></div><button class="btn btn--quiet" data-page="reports">Relatórios</button></div>
+          <div class="list">${reports.slice(0, 6).map((report) => `
+            <article class="list-item"><div class="list-item__main"><span class="avatar">${escapeHTML(report.avatar || initials(report.name))}</span><div class="list-item__copy"><strong>${escapeHTML(report.name)}</strong><span>${report.completed}/${report.total} atividades · Nota ${report.grade}</span></div></div><div class="list-item__side"><div style="width:95px"><div class="progress-bar"><span style="width:${report.progress}%"></span></div></div>${statusBadge(`${report.progress}%`, report.progress >= state.data.settings.weekly_minimum_percent ? 'success' : 'warning')}</div></article>
+          `).join('')}</div>
+        </section>
+        <aside class="grid">
+          ${live ? `<section class="card card--dark card--pad"><div class="card-header"><div><h3>Próxima aula ao vivo</h3><p style="color:rgba(255,255,255,.58)">${formatDate(live.starts_at)}</p></div>${statusBadge(live.status === 'live' ? 'Ao vivo' : 'Agendada', live.status === 'live' ? 'danger' : 'orange')}</div><h4 style="margin:0 0 18px;font-family:Georgia,serif;font-size:1.25rem;font-weight:500">${escapeHTML(live.title)}</h4><button class="btn btn--orange" data-page="live">Gerenciar aula</button></section>` : ''}
+          <section class="card card--pad"><div class="card-header"><div><h3>Respostas recentes</h3><p>Últimas atividades enviadas.</p></div></div><div class="list">${attempts.slice(0, 4).map((attempt) => `<article class="list-item"><div class="list-item__main"><span class="list-item__icon">${activityIcon(attempt.activity_type)}</span><div class="list-item__copy"><strong>${escapeHTML(attempt.student_name)}</strong><span>${escapeHTML(attempt.activity_title)}</span></div></div>${statusBadge(`${attempt.score}`, attempt.correct ? 'success' : 'warning')}</article>`).join('') || '<p class="muted">Nenhuma resposta.</p>'}</div></section>
+        </aside>
+      </div>
+    `;
+  }
+
+  function renderStudents() {
+    const students = state.data.students;
+    elements.content.innerHTML = `
+      ${pageHeader({ eyebrow: 'GESTÃO DA TURMA', title: 'Alunos cadastrados', description: 'Cadastre, edite, bloqueie, remova e gere o link individual de cada aluno.', actions: '<button class="btn btn--primary" data-action="new-student">＋ Cadastrar aluno</button>' })}
+      <section class="card card--pad" style="margin-bottom:18px">
+        <div class="inline-form"><label class="field"><span>Buscar aluno</span><input id="student-search" type="search" placeholder="Nome ou e-mail"></label><button class="btn btn--outline" data-action="copy-all-links">Copiar links da turma</button></div>
+      </section>
+      <div class="table-wrap">
+        <table><thead><tr><th>Aluno</th><th>Status</th><th>Link individual</th><th>Cadastrado</th><th>Ações</th></tr></thead><tbody id="students-table-body">${students.map(studentRow).join('')}</tbody></table>
+      </div>
+    `;
+  }
+
+  function studentRow(student) {
+    return `<tr data-student-row="${student.id}" data-search="${escapeHTML(`${student.name} ${student.email}`.toLowerCase())}">
+      <td><div class="table-user"><span class="avatar">${escapeHTML(student.avatar || initials(student.name))}</span><div><strong>${escapeHTML(student.name)}</strong><span>${escapeHTML(student.email)}</span></div></div></td>
+      <td>${statusBadge(student.blocked ? 'Bloqueado' : 'Ativo', student.blocked ? 'danger' : 'success')}</td>
+      <td><button class="btn btn--quiet" data-action="copy-link" data-student-id="${student.id}">Copiar link</button></td>
+      <td>${formatDate(student.created_at || new Date(), false)}</td>
+      <td><div class="table-actions"><button class="action-button" title="Editar" data-action="edit-student" data-student-id="${student.id}">✎</button><button class="action-button" title="${student.blocked ? 'Desbloquear' : 'Bloquear'}" data-action="toggle-student" data-student-id="${student.id}">${student.blocked ? '✓' : '⊘'}</button><button class="action-button" title="Gerar novo link" data-action="new-link" data-student-id="${student.id}">↻</button><button class="action-button" title="Remover" data-action="delete-student" data-student-id="${student.id}">×</button></div></td>
+    </tr>`;
+  }
+
+  function renderBuilder() {
+    const units = state.data.units;
+    elements.content.innerHTML = `
+      ${pageHeader({ eyebrow: 'CONTEÚDO DO CURSO', title: 'Aulas e atividades', description: 'Crie unidades, envie mídia e organize os exercícios da semana.', actions: '<button class="btn btn--outline" data-action="new-unit">＋ Unidade</button><button class="btn btn--outline" data-action="new-lesson">＋ Aula</button><button class="btn btn--primary" data-action="new-activity">＋ Atividade</button>' })}
+      <div class="grid">
+        ${units.map((unit, unitIndex) => `
+          <section class="card card--pad">
+            <div class="card-header"><div><span class="badge">UNIT ${String(unitIndex + 1).padStart(2, '0')}</span><h3 style="margin-top:10px">${escapeHTML(unit.title)}</h3><p>${escapeHTML(unit.description)}</p></div><div class="table-actions"><button class="action-button" data-action="edit-unit" data-unit-id="${unit.id}">✎</button><button class="action-button" data-action="delete-unit" data-unit-id="${unit.id}">×</button></div></div>
+            <div class="list">${unit.lessons.map((lesson) => `
+              <article class="list-item"><div class="list-item__main"><span class="list-item__icon">▤</span><div class="list-item__copy"><strong>${escapeHTML(lesson.title)}</strong><span>${escapeHTML(lesson.summary)} · ${lesson.activities.length} atividades</span></div></div><div class="list-item__side"><button class="btn btn--quiet" data-action="new-activity" data-lesson-id="${lesson.id}">＋ Atividade</button><button class="btn btn--outline" data-action="view-lesson" data-lesson-id="${lesson.id}">Ver</button></div></article>
+            `).join('') || emptyState('▤', 'Nenhuma aula', 'Adicione a primeira aula desta unidade.')}</div>
+          </section>
+        `).join('') || emptyState('＋', 'Nenhuma unidade', 'Crie a primeira unidade do curso.')}
+      </div>
+    `;
+  }
+
+  function renderAttendance() {
+    const reports = state.data.reports;
+    const absences = state.data.absences;
+    elements.content.innerHTML = `
+      ${pageHeader({ eyebrow: 'CONTROLE SEMANAL', title: 'Presenças e faltas', description: 'A falta ao vivo considera o tempo conectado. A falta online considera o conjunto obrigatório da semana.' })}
+      <div class="grid grid--2" style="margin-bottom:20px">
+        <section class="card card--pad"><div class="card-header"><div><h3>Presença online semanal</h3><p>Mínimo definido: ${state.data.settings.weekly_minimum_percent}%</p></div></div><div class="list">${reports.map((report) => `<article class="list-item"><div class="list-item__main"><span class="avatar">${escapeHTML(report.avatar || initials(report.name))}</span><div class="list-item__copy"><strong>${escapeHTML(report.name)}</strong><span>${report.completed}/${report.total} atividades obrigatórias</span></div></div>${statusBadge(report.progress >= state.data.settings.weekly_minimum_percent ? 'Presente' : 'Abaixo do mínimo', report.progress >= state.data.settings.weekly_minimum_percent ? 'success' : 'danger')}</article>`).join('')}</div></section>
+        <section class="card card--pad"><div class="card-header"><div><h3>Regra da aula ao vivo</h3><p>Tempo mínimo: ${state.data.settings.live_minimum_percent}%</p></div></div><p style="margin:0;color:var(--muted);font-size:.82rem;line-height:1.7">O sistema soma o tempo em que o aluno permanece conectado na sala. Ao final, o professor pode revisar, justificar ou remover a falta.</p></section>
+      </div>
+      <section class="card card--pad">
+        <div class="card-header"><div><h3>Faltas registradas</h3><p>Histórico de faltas ao vivo e online.</p></div></div>
+        <div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Tipo</th><th>Motivo</th><th>Status</th><th>Ações</th></tr></thead><tbody>${absences.length ? absences.map((absence) => `<tr><td><strong>${escapeHTML(absence.student_name)}</strong><br><span class="muted">${escapeHTML(absence.student_email)}</span></td><td>${absence.kind === 'live' ? 'Aula ao vivo' : 'Online semanal'}</td><td>${escapeHTML(absence.reason || absence.reference_key)}</td><td>${statusBadge(absence.justified ? 'Justificada' : 'Registrada', absence.justified ? 'success' : 'danger')}</td><td><div class="table-actions"><button class="action-button" data-action="justify-absence" data-absence-id="${absence.id}">${absence.justified ? '↶' : '✓'}</button><button class="action-button" data-action="delete-absence" data-absence-id="${absence.id}">×</button></div></td></tr>`).join('') : '<tr><td colspan="5">Nenhuma falta registrada.</td></tr>'}</tbody></table></div>
+      </section>
+    `;
+  }
+
+  function renderReports() {
+    const reports = state.data.reports;
+    const selected = reports.find((report) => report.id === state.activeReportStudentId) || reports[0];
+    if (!selected) {
+      elements.content.innerHTML = emptyState('↗', 'Nenhum aluno', 'Cadastre um aluno para gerar relatórios.');
+      return;
+    }
+    state.activeReportStudentId = selected.id;
+    elements.content.innerHTML = `
+      ${pageHeader({ eyebrow: 'RELATÓRIO INDIVIDUAL', title: 'Desempenho dos alunos', description: 'Selecione um aluno para visualizar progresso, notas, entregas e faltas.', actions: '<button class="btn btn--outline" data-action="print-report">Imprimir relatório</button>' })}
+      <div class="lesson-layout">
+        <aside class="lesson-sidebar">
+          <section class="card card--pad"><div class="card-header"><div><h4>Alunos</h4><p>Escolha um perfil.</p></div></div><div class="list">${reports.map((report) => `<button class="lesson-nav-button ${report.id === selected.id ? 'is-active' : ''}" data-report-student="${report.id}"><span class="avatar">${escapeHTML(report.avatar || initials(report.name))}</span><span><strong>${escapeHTML(report.name)}</strong><small>${report.progress}% concluído</small></span></button>`).join('')}</div></section>
+        </aside>
+        <div class="lesson-main">
+          <section class="report-hero"><span class="avatar">${escapeHTML(selected.avatar || initials(selected.name))}</span><div><h2>${escapeHTML(selected.name)}</h2><p>${escapeHTML(selected.email)}</p></div><div class="report-score"><strong>${selected.grade}</strong><span>Nota média</span></div></section>
+          <div class="stats-grid" style="grid-template-columns:repeat(4,minmax(0,1fr))">${statCard('Progresso', `${selected.progress}%`, 'do curso')}${statCard('Concluídas', `${selected.completed}`, `de ${selected.total}`)}${statCard('Faltas', `${selected.absences}`, 'não justificadas', selected.absences > 0)}${statCard('Status', selected.blocked ? 'Bloqueado' : 'Ativo', 'acesso')}</div>
+          <section class="card card--pad"><div class="card-header"><div><h3>Resumo individual</h3><p>Dados atualizados pelas atividades e faltas registradas.</p></div></div><div class="progress-bar"><span style="width:${selected.progress}%"></span></div><p style="color:var(--muted);font-size:.8rem;line-height:1.6">${selected.progress >= state.data.settings.weekly_minimum_percent ? 'O aluno atingiu a porcentagem mínima semanal.' : 'O aluno está abaixo da porcentagem mínima e precisa concluir mais atividades.'}</p><button class="btn btn--primary" data-action="load-full-report" data-student-id="${selected.id}">Abrir detalhes completos</button></section>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderSettings() {
+    const settings = state.data.settings;
+    elements.content.innerHTML = `
+      ${pageHeader({ eyebrow: 'REGRAS DO CURSO', title: 'Configurações', description: 'Defina os percentuais mínimos, a sala ao vivo e a proteção de conteúdo.' })}
+      <form id="settings-form" class="grid">
+        <section class="card card--pad"><div class="card-header"><div><h3>Identidade do curso</h3><p>Nome exibido na plataforma.</p></div></div><div class="form-grid"><label class="field"><span>Nome da escola</span><input name="schoolName" value="${escapeHTML(settings.school_name)}"></label><label class="field"><span>Nome do curso</span><input name="courseName" value="${escapeHTML(settings.course_name)}"></label></div></section>
+        <section class="card card--pad"><div class="card-header"><div><h3>Presença e faltas</h3><p>Percentuais mínimos usados pelo sistema.</p></div></div><div class="form-grid"><label class="field"><span>Mínimo de atividades semanais (%)</span><input name="weeklyMinimumPercent" type="number" min="1" max="100" value="${settings.weekly_minimum_percent}"></label><label class="field"><span>Tempo mínimo na aula ao vivo (%)</span><input name="liveMinimumPercent" type="number" min="1" max="100" value="${settings.live_minimum_percent}"></label></div></section>
+        <section class="card card--pad"><div class="card-header"><div><h3>Aula ao vivo</h3><p>Endereço padrão da sala de videochamada.</p></div></div><div class="form-grid"><label class="field field--full"><span>URL da sala</span><input name="liveRoomUrl" type="url" value="${escapeHTML(settings.live_room_url)}"></label><label class="field"><span>Fuso horário</span><input name="timezone" value="${escapeHTML(settings.timezone)}"></label></div></section>
+        <section class="switch-row"><div><strong>Proteção do conteúdo</strong><span>Bloqueia seleção, cópia, botão direito e exibe marca d’água para o aluno.</span></div><button id="content-protection-switch" class="switch ${settings.content_protection ? 'is-on' : ''}" type="button" aria-label="Ativar ou desativar proteção"></button><input name="contentProtection" type="hidden" value="${settings.content_protection ? '1' : '0'}"></section>
+        <div><button class="btn btn--primary btn--large" type="submit">Salvar configurações</button></div>
+      </form>
+    `;
+  }
+
+  async function renderLiveClass() {
+    const live = state.user.role === 'teacher'
+      ? state.data.liveClasses?.find((item) => item.status !== 'finished') || state.data.liveClasses?.[0]
+      : state.data.liveClass;
+    if (!live) {
+      elements.content.innerHTML = `
+        ${pageHeader({ eyebrow: 'CONVERSAÇÃO', title: 'Aula ao vivo', description: 'O professor ainda não agendou a próxima aula.', actions: state.user.role === 'teacher' ? '<button class="btn btn--primary" data-action="new-live-class">＋ Agendar aula</button>' : '' })}
+        ${emptyState('●', 'Nenhuma aula agendada', 'Quando uma aula for criada, a sala aparecerá aqui.')}
+      `;
+      return;
+    }
+    const questions = await loadLiveQuestions(live.id);
+    const published = questions.find((question) => question.published) || questions[0];
+    elements.content.innerHTML = `
+      ${pageHeader({
+        eyebrow: live.status === 'live' ? 'AO VIVO AGORA' : 'AULA AGENDADA',
+        title: live.title,
+        description: `${formatDate(live.starts_at)} · ${live.duration_minutes} minutos · Presença mínima de ${live.minimum_percent}%`,
+        actions: state.user.role === 'teacher' ? '<button class="btn btn--outline" data-action="new-live-class">Agendar outra</button>' : ''
+      })}
+      <div class="live-layout">
+        <div class="video-room"><iframe src="${escapeHTML(live.room_url)}#config.prejoinPageEnabled=false&config.disableDeepLinking=true" title="Sala de videochamada" allow="camera; microphone; fullscreen; display-capture; autoplay"></iframe></div>
+        <aside class="live-panel" data-live-id="${live.id}">
+          <div class="live-status"><span class="live-dot">Sala conectada</span><span id="presence-label" class="badge badge--success">Presença sendo registrada</span></div>
+          ${state.user.role === 'teacher' ? renderTeacherLivePanel(live, questions, published) : renderStudentLivePanel(live, published)}
+        </aside>
+      </div>
+    `;
+    startLiveTimers(live);
+  }
+
+  async function loadLiveQuestions(liveId) {
+    if (state.mode === 'server') {
+      try {
+        const payload = await api(`/api/live/${liveId}/questions`);
+        return payload.questions || [];
+      } catch {
+        return [];
+      }
+    }
+    const db = getDemoDB();
+    return db.liveQuestions.filter((question) => question.live_class_id === Number(liveId)).map((question) => {
+      const own = db.liveAnswers.find((answer) => answer.question_id === question.id && answer.student_id === state.user.id);
+      return state.user.role === 'teacher'
+        ? { ...question, answer_count: db.liveAnswers.filter((answer) => answer.question_id === question.id).length, selected_student_name: db.users.find((user) => user.id === question.selected_student_id)?.name }
+        : { ...question, correct_answer: question.answers_released ? question.correct_answer : '', own_answer: own?.answer_text || '', own_audio: own?.audio_url || '' };
+    });
+  }
+
+  function renderStudentLivePanel(live, question) {
+    if (!question || !question.published) return '<div class="live-empty"><div><span class="empty-state__icon">…</span><h3>Aguardando o professor</h3><p>A pergunta aparecerá aqui quando for publicada.</p></div></div>';
+    return `
+      <div class="live-question"><div style="display:flex;justify-content:space-between;gap:12px"><small>Pergunta ao vivo</small><span id="live-countdown" class="countdown">${question.time_limit_seconds}s</span></div><h3>${escapeHTML(question.prompt)}</h3>${question.selected_student_id === state.user.id ? statusBadge('Você foi escolhido para responder falando', 'orange') : ''}</div>
+      <form id="live-answer-form" class="live-answer-form" data-question-id="${question.id}" data-response-type="${question.response_type}">
+        ${question.response_type === 'audio' ? '<button id="live-audio-button" class="btn btn--orange" type="button">◉ Gravar resposta em áudio</button><audio id="live-audio-preview" class="is-hidden" controls></audio><input id="live-answer-input" type="hidden">' : `<label class="field"><span>Sua resposta</span><textarea id="live-answer-input" placeholder="Digite sua resposta em inglês...">${escapeHTML(question.own_answer || '')}</textarea></label>`}
+        <button class="btn btn--primary" type="submit">Enviar resposta</button>
+      </form>
+      ${question.answers_released ? `<div class="exercise-result"><strong>Resposta correta</strong><p>${escapeHTML(question.correct_answer)}</p></div>` : '<p class="muted" style="margin-top:15px;font-size:.76rem;line-height:1.5">As respostas dos outros alunos ficam ocultas até o professor liberar.</p>'}
+    `;
+  }
+
+  function renderTeacherLivePanel(live, questions, selected) {
+    return `
+      <div class="live-teacher-tools">
+        <button class="btn btn--primary" data-action="new-live-question" data-live-id="${live.id}">＋ Criar pergunta</button>
+        <div class="list">${questions.length ? questions.map((question) => `
+          <article class="list-item"><div class="list-item__main"><span class="list-item__icon">?</span><div class="list-item__copy"><strong>${escapeHTML(question.prompt)}</strong><span>${question.answer_count || 0} respostas · ${question.time_limit_seconds}s</span></div></div><div class="list-item__side"><button class="action-button" data-action="publish-question" data-question-id="${question.id}" title="Publicar">${question.published ? '■' : '▶'}</button><button class="action-button" data-action="release-answers" data-question-id="${question.id}" title="Liberar respostas">✓</button><button class="action-button" data-action="view-live-answers" data-question-id="${question.id}" title="Ver respostas">◎</button></div></article>
+        `).join('') : '<p class="muted">Nenhuma pergunta criada.</p>'}</div>
+        ${selected?.selected_student_name ? `<div class="exercise-result"><strong>Aluno escolhido</strong><p>${escapeHTML(selected.selected_student_name)}</p></div>` : ''}
+      </div>
+    `;
+  }
+
+  function startLiveTimers(live) {
+    stopLiveTimers();
+    if (state.user.role === 'student') {
+      const ping = async () => {
+        try {
+          if (state.mode === 'server') {
+            const payload = await api(`/api/live/${live.id}/ping`, { method: 'POST', body: JSON.stringify({ seconds: 15 }) });
+            const label = $('#presence-label');
+            if (label) label.textContent = `${payload.presence.percentage}% de presença`;
+          } else {
+            demoLivePing(live);
+          }
+        } catch {
+          // Mantém a aula aberta mesmo se a rede oscilar.
+        }
+      };
+      ping();
+      state.liveTimer = setInterval(ping, 15000);
+      const countdown = $('#live-countdown');
+      if (countdown) {
+        let seconds = Number(countdown.textContent.replace(/\D/g, '')) || 60;
+        const countdownTimer = setInterval(() => {
+          if (!document.body.contains(countdown)) return clearInterval(countdownTimer);
+          seconds = Math.max(0, seconds - 1);
+          countdown.textContent = `${seconds}s`;
+        }, 1000);
+      }
+      $('#live-audio-button')?.addEventListener('click', toggleLiveAudio);
+    }
+    state.livePoll = setInterval(async () => {
+      if (state.page === 'live') await renderLiveClass();
+    }, 12000);
+  }
+
+  function stopLiveTimers() {
+    clearInterval(state.liveTimer);
+    clearInterval(state.livePoll);
+    state.liveTimer = null;
+    state.livePoll = null;
+  }
+
+  function demoLivePing(live) {
+    const db = getDemoDB();
+    let presence = db.livePresence.find((item) => item.live_class_id === live.id && item.student_id === state.user.id);
+    if (!presence) {
+      presence = { id: Date.now(), live_class_id: live.id, student_id: state.user.id, joined_at: new Date().toISOString(), seconds_present: 0, percentage: 0, status: 'pending' };
+      db.livePresence.push(presence);
+    }
+    presence.seconds_present += 15;
+    presence.percentage = Math.min(100, Math.round((presence.seconds_present / (live.duration_minutes * 60)) * 1000) / 10);
+    presence.status = presence.percentage >= live.minimum_percent ? 'present' : 'pending';
+    saveDemoDB(db);
+    const label = $('#presence-label');
+    if (label) label.textContent = `${presence.percentage}% de presença`;
+  }
+
+  async function toggleLiveAudio() {
+    const button = $('#live-audio-button');
+    if (state.mediaRecorder?.state === 'recording') {
+      state.mediaRecorder.stop();
+      button.textContent = '◉ Gravar novamente';
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.audioChunks = [];
+      state.mediaRecorder = new MediaRecorder(stream);
+      state.mediaRecorder.ondataavailable = (event) => event.data.size && state.audioChunks.push(event.data);
+      state.mediaRecorder.onstop = () => {
+        state.audioBlob = new Blob(state.audioChunks, { type: state.mediaRecorder.mimeType || 'audio/webm' });
+        const preview = $('#live-audio-preview');
+        preview.src = URL.createObjectURL(state.audioBlob);
+        preview.classList.remove('is-hidden');
+        stream.getTracks().forEach((track) => track.stop());
+      };
+      state.mediaRecorder.start();
+      button.textContent = '■ Parar gravação';
+    } catch (error) {
+      toast('Microfone indisponível', error.message, 'error');
+    }
+  }
+
+  async function submitLiveAnswer(form) {
+    const questionId = Number(form.dataset.questionId);
+    let answerText = $('#live-answer-input')?.value?.trim() || '';
+    let audioUrl = '';
+    if (form.dataset.responseType === 'audio') {
+      if (!state.audioBlob) return toast('Grave sua resposta', 'Use o botão de áudio antes de enviar.', 'error');
+      audioUrl = state.mode === 'server' ? await uploadBlob(state.audioBlob, 'resposta-ao-vivo.webm') : URL.createObjectURL(state.audioBlob);
+    } else if (!answerText) {
+      return toast('Digite sua resposta', '', 'error');
+    }
+    try {
+      if (state.mode === 'server') {
+        await api(`/api/live/questions/${questionId}/answer`, { method: 'POST', body: JSON.stringify({ answerText, audioUrl }) });
+      } else {
+        const db = getDemoDB();
+        const existing = db.liveAnswers.find((answer) => answer.question_id === questionId && answer.student_id === state.user.id);
+        if (existing) Object.assign(existing, { answer_text: answerText, audio_url: audioUrl, created_at: new Date().toISOString() });
+        else db.liveAnswers.push({ id: db.counters.answer++, question_id: questionId, student_id: state.user.id, answer_text: answerText, audio_url: audioUrl, created_at: new Date().toISOString() });
+        saveDemoDB(db);
+      }
+      toast('Resposta enviada', 'Os colegas não verão sua resposta antes da liberação do professor.');
+    } catch (error) {
+      toast('Falha ao enviar', error.message, 'error');
+    }
+  }
+
+  function modalNewStudent(student = null) {
+    openModal({
+      title: student ? 'Editar aluno' : 'Cadastrar aluno',
+      subtitle: 'O link individual será gerado automaticamente.',
+      body: `<form id="student-form" data-student-id="${student?.id || ''}" class="form-stack"><label class="field"><span>Nome completo</span><input name="name" value="${escapeHTML(student?.name || '')}" required></label><label class="field"><span>E-mail</span><input name="email" type="email" value="${escapeHTML(student?.email || '')}" required></label>${student ? '' : '<label class="field"><span>Senha inicial</span><input name="password" value="Aluno123" required></label>'}</form>`,
+      footer: '<button class="btn btn--outline" data-action="close-modal">Cancelar</button><button class="btn btn--primary" type="submit" form="student-form">Salvar aluno</button>'
+    });
+  }
+
+  async function saveStudent(form) {
+    const data = Object.fromEntries(new FormData(form));
+    const id = Number(form.dataset.studentId || 0);
+    try {
+      if (state.mode === 'server') {
+        const payload = await api(id ? `/api/teacher/students/${id}` : '/api/teacher/students', { method: id ? 'PUT' : 'POST', body: JSON.stringify(data) });
+        state.data = payload.dashboard;
+      } else {
+        const db = getDemoDB();
+        if (id) {
+          const student = db.users.find((user) => user.id === id);
+          Object.assign(student, { name: data.name.trim(), email: data.email.trim().toLowerCase(), avatar: initials(data.name) });
+        } else {
+          if (db.users.some((user) => user.email.toLowerCase() === data.email.trim().toLowerCase())) throw new Error('Já existe um usuário com este e-mail.');
+          db.users.push({ id: db.counters.user++, role: 'student', name: data.name.trim(), email: data.email.trim().toLowerCase(), password: data.password || 'Aluno123', avatar: initials(data.name), blocked: false, access_token: `student-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`, created_at: new Date().toISOString() });
+        }
+        saveDemoDB(db);
+        state.data = demoTeacherDashboard();
+      }
+      closeModal();
+      renderStudents();
+      renderShell();
+      toast('Aluno salvo', id ? 'Cadastro atualizado.' : 'Link individual criado com sucesso.');
+    } catch (error) {
+      toast('Não foi possível salvar', error.message, 'error');
+    }
+  }
+
+  function modalNewUnit(unit = null) {
+    openModal({
+      title: unit ? 'Editar unidade' : 'Criar unidade',
+      body: `<form id="unit-form" data-unit-id="${unit?.id || ''}" class="form-stack"><label class="field"><span>Título</span><input name="title" value="${escapeHTML(unit?.title || '')}" required></label><label class="field"><span>Descrição</span><textarea name="description">${escapeHTML(unit?.description || '')}</textarea></label></form>`,
+      footer: '<button class="btn btn--outline" data-action="close-modal">Cancelar</button><button class="btn btn--primary" type="submit" form="unit-form">Salvar unidade</button>'
+    });
+  }
+
+  async function saveUnit(form) {
+    const values = Object.fromEntries(new FormData(form));
+    const id = Number(form.dataset.unitId || 0);
+    try {
+      if (state.mode === 'server') {
+        const payload = await api(id ? `/api/teacher/units/${id}` : '/api/teacher/units', { method: id ? 'PUT' : 'POST', body: JSON.stringify(values) });
+        state.data = payload.dashboard;
+      } else {
+        const db = getDemoDB();
+        if (id) Object.assign(db.units.find((unit) => unit.id === id), { title: values.title, description: values.description });
+        else db.units.push({ id: db.counters.unit++, title: values.title, description: values.description, position: db.units.length + 1, published: true, lessons: [] });
+        saveDemoDB(db);
+        state.data = demoTeacherDashboard();
+      }
+      closeModal(); renderBuilder(); toast('Unidade salva');
+    } catch (error) { toast('Erro ao salvar', error.message, 'error'); }
+  }
+
+  function modalNewLesson() {
+    openModal({
+      title: 'Criar aula',
+      subtitle: 'A aula pode conter vídeo, texto, exemplos, imagem e áudio.',
+      body: `<form id="lesson-form" class="form-stack"><label class="field"><span>Unidade</span><select name="unitId" required>${state.data.units.map((unit) => `<option value="${unit.id}">${escapeHTML(unit.title)}</option>`).join('')}</select></label><label class="field"><span>Título da aula</span><input name="title" required></label><label class="field"><span>Resumo</span><input name="summary"></label><label class="field"><span>Explicação escrita</span><textarea name="writtenContent"></textarea></label><label class="field"><span>Exemplos, um por linha</span><textarea name="examples"></textarea></label><label class="field"><span>URL da videoaula</span><input name="videoUrl" type="url" placeholder="https://www.youtube.com/embed/..."></label></form>`,
+      footer: '<button class="btn btn--outline" data-action="close-modal">Cancelar</button><button class="btn btn--primary" type="submit" form="lesson-form">Criar aula</button>'
+    });
+  }
+
+  async function saveLesson(form) {
+    const raw = Object.fromEntries(new FormData(form));
+    const values = { ...raw, unitId: Number(raw.unitId), examples: raw.examples.split('\n').map((item) => item.trim()).filter(Boolean) };
+    try {
+      if (state.mode === 'server') {
+        const payload = await api('/api/teacher/lessons', { method: 'POST', body: JSON.stringify(values) });
+        state.data = payload.dashboard;
+      } else {
+        const db = getDemoDB();
+        const unit = db.units.find((item) => item.id === values.unitId);
+        unit.lessons.push({ id: db.counters.lesson++, unit_id: unit.id, title: values.title, summary: values.summary, written_content: values.writtenContent, examples: values.examples, video_url: values.videoUrl, audio_url: '', image_url: '', position: unit.lessons.length + 1, published: true, activities: [] });
+        saveDemoDB(db); state.data = demoTeacherDashboard();
+      }
+      closeModal(); renderBuilder(); toast('Aula criada');
+    } catch (error) { toast('Erro ao criar aula', error.message, 'error'); }
+  }
+
+  function modalNewActivity(preselectedLessonId = '') {
+    const lessons = state.data.units.flatMap((unit) => unit.lessons.map((lesson) => ({ ...lesson, unitTitle: unit.title })));
+    openModal({
+      title: 'Criar atividade',
+      subtitle: 'Defina a correção, o prazo e se a atividade conta para a presença semanal.',
+      wide: true,
+      body: `<form id="activity-create-form" class="form-grid"><label class="field"><span>Aula</span><select name="lessonId" required>${lessons.map((lesson) => `<option value="${lesson.id}" ${Number(preselectedLessonId) === lesson.id ? 'selected' : ''}>${escapeHTML(lesson.unitTitle)} — ${escapeHTML(lesson.title)}</option>`).join('')}</select></label><label class="field"><span>Tipo</span><select name="type"><option value="multiple_choice">Alternativas</option><option value="fill_blank">Completar frase</option><option value="writing">Escrita</option><option value="listening">Escuta</option><option value="pronunciation">Pronúncia</option></select></label><label class="field field--full"><span>Título</span><input name="title" required></label><label class="field field--full"><span>Enunciado</span><textarea name="prompt" required></textarea></label><label class="field field--full"><span>Alternativas, uma por linha</span><textarea name="options"></textarea></label><label class="field"><span>Resposta correta</span><input name="correctAnswer"></label><label class="field"><span>Pontos</span><input name="points" type="number" value="10" min="1" max="100"></label><label class="field field--full"><span>Explicação quando errar</span><textarea name="explanation"></textarea></label><label class="field"><span>Prazo</span><input name="dueAt" type="datetime-local"></label><label class="field"><span>Semana</span><input name="weekLabel" value="Semana atual"></label><label class="field field--full"><span>URL de áudio, vídeo ou imagem</span><input name="mediaUrl" type="url"></label><label class="switch-row field--full"><div><strong>Atividade obrigatória</strong><span>Conta para a presença online semanal.</span></div><button id="activity-required-switch" class="switch is-on" type="button"></button><input name="required" type="hidden" value="1"></label></form>`,
+      footer: '<button class="btn btn--outline" data-action="close-modal">Cancelar</button><button class="btn btn--primary" type="submit" form="activity-create-form">Criar atividade</button>'
+    });
+  }
+
+  async function saveActivity(form) {
+    const raw = Object.fromEntries(new FormData(form));
+    const values = { ...raw, lessonId: Number(raw.lessonId), points: Number(raw.points), required: raw.required === '1', options: raw.options.split('\n').map((item) => item.trim()).filter(Boolean), dueAt: raw.dueAt ? new Date(raw.dueAt).toISOString() : null };
+    try {
+      if (state.mode === 'server') {
+        const payload = await api('/api/teacher/activities', { method: 'POST', body: JSON.stringify(values) });
+        state.data = payload.dashboard;
+      } else {
+        const db = getDemoDB();
+        const lesson = db.units.flatMap((unit) => unit.lessons).find((item) => item.id === values.lessonId);
+        lesson.activities.push({ id: db.counters.activity++, lesson_id: lesson.id, week_label: values.weekLabel, title: values.title, type: values.type, prompt: values.prompt, options: values.options, correct_answer: values.correctAnswer, explanation: values.explanation, media_url: values.mediaUrl, required: values.required, points: values.points, due_at: values.dueAt, position: lesson.activities.length + 1 });
+        saveDemoDB(db); state.data = demoTeacherDashboard();
+      }
+      closeModal(); renderBuilder(); renderShell(); toast('Atividade criada');
+    } catch (error) { toast('Erro ao criar atividade', error.message, 'error'); }
+  }
+
+  function modalNewNotice() {
+    const students = state.user.role === 'teacher' ? state.data.students : [];
+    openModal({
+      title: 'Enviar aviso',
+      body: `<form id="notice-form" class="form-stack"><label class="field"><span>Destinatário</span><select name="studentId"><option value="">Toda a turma</option>${students.map((student) => `<option value="${student.id}">${escapeHTML(student.name)}</option>`).join('')}</select></label><label class="field"><span>Título</span><input name="title" required></label><label class="field"><span>Mensagem</span><textarea name="message" required></textarea></label></form>`,
+      footer: '<button class="btn btn--outline" data-action="close-modal">Cancelar</button><button class="btn btn--primary" type="submit" form="notice-form">Enviar aviso</button>'
+    });
+  }
+
+  async function saveNotice(form) {
+    const values = Object.fromEntries(new FormData(form));
+    try {
+      if (state.mode === 'server') {
+        const payload = await api('/api/teacher/notices', { method: 'POST', body: JSON.stringify(values) });
+        state.data = payload.dashboard;
+      } else {
+        const db = getDemoDB();
+        db.notices.push({ id: db.counters.notice++, teacher_id: state.user.id, student_id: values.studentId ? Number(values.studentId) : null, title: values.title, message: values.message, created_at: new Date().toISOString() });
+        saveDemoDB(db); state.data = demoTeacherDashboard();
+      }
+      closeModal(); renderNotices(); renderShell(); toast('Aviso enviado');
+    } catch (error) { toast('Erro ao enviar aviso', error.message, 'error'); }
+  }
+
+  function modalNewLiveClass() {
+    openModal({ title: 'Agendar aula ao vivo', body: `<form id="live-class-form" class="form-stack"><label class="field"><span>Título</span><input name="title" value="Conversation Club" required></label><label class="field"><span>Data e horário</span><input name="startsAt" type="datetime-local" required></label><div class="form-grid"><label class="field"><span>Duração (minutos)</span><input name="durationMinutes" type="number" value="60"></label><label class="field"><span>Presença mínima (%)</span><input name="minimumPercent" type="number" value="${state.data.settings.live_minimum_percent}"></label></div><label class="field"><span>URL da sala</span><input name="roomUrl" value="${escapeHTML(state.data.settings.live_room_url)}"></label></form>`, footer: '<button class="btn btn--outline" data-action="close-modal">Cancelar</button><button class="btn btn--primary" type="submit" form="live-class-form">Agendar</button>' });
+  }
+
+  async function saveLiveClass(form) {
+    const raw = Object.fromEntries(new FormData(form));
+    const values = { ...raw, startsAt: new Date(raw.startsAt).toISOString(), durationMinutes: Number(raw.durationMinutes), minimumPercent: Number(raw.minimumPercent) };
+    try {
+      if (state.mode === 'server') {
+        const payload = await api('/api/teacher/live-classes', { method: 'POST', body: JSON.stringify(values) });
+        state.data = payload.dashboard;
+      } else {
+        const db = getDemoDB();
+        db.liveClasses.push({ id: db.counters.live++, title: values.title, starts_at: values.startsAt, duration_minutes: values.durationMinutes, minimum_percent: values.minimumPercent, room_url: values.roomUrl, status: 'scheduled', created_at: new Date().toISOString() });
+        saveDemoDB(db); state.data = demoTeacherDashboard();
+      }
+      closeModal(); navigate('live'); toast('Aula agendada');
+    } catch (error) { toast('Erro ao agendar', error.message, 'error'); }
+  }
+
+  function modalNewLiveQuestion(liveId) {
+    openModal({ title: 'Criar pergunta ao vivo', body: `<form id="live-question-form" data-live-id="${liveId}" class="form-stack"><label class="field"><span>Pergunta</span><textarea name="prompt" required></textarea></label><label class="field"><span>Resposta correta</span><input name="correctAnswer"></label><div class="form-grid"><label class="field"><span>Tipo de resposta</span><select name="responseType"><option value="text">Texto</option><option value="audio">Áudio</option></select></label><label class="field"><span>Tempo para responder</span><input name="timeLimitSeconds" type="number" value="60" min="10" max="600"></label></div></form>`, footer: '<button class="btn btn--outline" data-action="close-modal">Cancelar</button><button class="btn btn--primary" type="submit" form="live-question-form">Criar pergunta</button>' });
+  }
+
+  async function saveLiveQuestion(form) {
+    const values = Object.fromEntries(new FormData(form));
+    const liveId = Number(form.dataset.liveId);
+    try {
+      if (state.mode === 'server') await api(`/api/teacher/live/${liveId}/questions`, { method: 'POST', body: JSON.stringify(values) });
+      else {
+        const db = getDemoDB();
+        db.liveQuestions.push({ id: db.counters.question++, live_class_id: liveId, prompt: values.prompt, correct_answer: values.correctAnswer, response_type: values.responseType, time_limit_seconds: Number(values.timeLimitSeconds), published: false, answers_released: false, selected_student_id: null, created_at: new Date().toISOString() });
+        saveDemoDB(db);
+      }
+      closeModal(); renderLiveClass(); toast('Pergunta criada');
+    } catch (error) { toast('Erro ao criar pergunta', error.message, 'error'); }
+  }
+
+  async function toggleQuestion(questionId, field) {
+    try {
+      if (state.mode === 'server') {
+        const questions = await loadLiveQuestions(Number($('.live-panel')?.dataset.liveId));
+        const question = questions.find((item) => item.id === questionId);
+        await api(`/api/teacher/live/questions/${questionId}`, { method: 'PUT', body: JSON.stringify(field === 'published' ? { published: !question.published } : { answersReleased: true }) });
+      } else {
+        const db = getDemoDB();
+        const question = db.liveQuestions.find((item) => item.id === questionId);
+        if (field === 'published') {
+          db.liveQuestions.filter((item) => item.live_class_id === question.live_class_id).forEach((item) => { item.published = false; });
+          question.published = !question.published;
+        } else question.answers_released = true;
+        saveDemoDB(db);
+      }
+      renderLiveClass();
+    } catch (error) { toast('Erro na pergunta', error.message, 'error'); }
+  }
+
+  async function showLiveAnswers(questionId) {
+    let answers;
+    if (state.mode === 'server') answers = (await api(`/api/teacher/live/questions/${questionId}/answers`)).answers;
+    else {
+      const db = getDemoDB();
+      answers = db.liveAnswers.filter((answer) => answer.question_id === questionId).map((answer) => ({ ...answer, student_name: db.users.find((user) => user.id === answer.student_id)?.name, student_email: db.users.find((user) => user.id === answer.student_id)?.email }));
+    }
+    const students = state.data.students || [];
+    openModal({
+      title: 'Respostas dos alunos',
+      subtitle: 'As respostas ficam privadas até você liberar.',
+      wide: true,
+      body: `<div class="answer-list">${answers.length ? answers.map((answer) => `<article class="answer-item"><strong>${escapeHTML(answer.student_name)}</strong>${answer.audio_url ? `<audio controls src="${escapeHTML(answer.audio_url)}"></audio>` : `<p>${escapeHTML(answer.answer_text)}</p>`}<button class="btn btn--quiet" style="margin-top:8px" data-action="select-speaking-student" data-question-id="${questionId}" data-student-id="${answer.student_id}">Escolher para falar</button></article>`).join('') : emptyState('…', 'Aguardando respostas', 'Nenhum aluno respondeu ainda.')}</div><div class="section-heading" style="margin-top:20px"><div><h3>Escolher outro aluno</h3></div></div><select id="speaking-student-select">${students.map((student) => `<option value="${student.id}">${escapeHTML(student.name)}</option>`).join('')}</select>`,
+      footer: `<button class="btn btn--outline" data-action="close-modal">Fechar</button><button class="btn btn--primary" data-action="select-speaking-from-list" data-question-id="${questionId}">Escolher aluno</button>`
+    });
+  }
+
+  async function selectSpeakingStudent(questionId, studentId) {
+    try {
+      if (state.mode === 'server') await api(`/api/teacher/live/questions/${questionId}`, { method: 'PUT', body: JSON.stringify({ selectedStudentId: Number(studentId) }) });
+      else {
+        const db = getDemoDB();
+        db.liveQuestions.find((question) => question.id === Number(questionId)).selected_student_id = Number(studentId);
+        saveDemoDB(db);
+      }
+      closeModal(); renderLiveClass(); toast('Aluno selecionado');
+    } catch (error) { toast('Erro ao selecionar', error.message, 'error'); }
+  }
+
+  async function updateStudentAction(action, studentId) {
+    const student = state.data.students.find((item) => item.id === Number(studentId));
+    if (!student) return;
+    try {
+      if (action === 'edit') return modalNewStudent(student);
+      if (action === 'delete' && !confirm(`Remover ${student.name}?`)) return;
+      if (state.mode === 'server') {
+        let payload;
+        if (action === 'delete') payload = await api(`/api/teacher/students/${student.id}`, { method: 'DELETE' });
+        else if (action === 'new-link') payload = await api(`/api/teacher/students/${student.id}/new-link`, { method: 'POST', body: '{}' });
+        else payload = await api(`/api/teacher/students/${student.id}`, { method: 'PUT', body: JSON.stringify({ blocked: !student.blocked }) });
+        state.data = payload.dashboard;
+      } else {
+        const db = getDemoDB();
+        const target = db.users.find((user) => user.id === student.id);
+        if (action === 'delete') db.users = db.users.filter((user) => user.id !== student.id);
+        else if (action === 'new-link') target.access_token = `student-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+        else target.blocked = !target.blocked;
+        saveDemoDB(db); state.data = demoTeacherDashboard();
+      }
+      renderStudents(); renderShell(); toast('Cadastro atualizado');
+    } catch (error) { toast('Erro no cadastro', error.message, 'error'); }
+  }
+
+  async function deleteUnit(unitId) {
+    if (!confirm('Remover esta unidade e todo o conteúdo dentro dela?')) return;
+    try {
+      if (state.mode === 'server') state.data = (await api(`/api/teacher/units/${unitId}`, { method: 'DELETE' })).dashboard;
+      else {
+        const db = getDemoDB(); db.units = db.units.filter((unit) => unit.id !== Number(unitId)); saveDemoDB(db); state.data = demoTeacherDashboard();
+      }
+      renderBuilder(); renderShell();
+    } catch (error) { toast('Erro ao remover', error.message, 'error'); }
+  }
+
+  async function updateAbsence(absenceId, action) {
+    try {
+      if (state.mode === 'server') {
+        const absence = state.data.absences.find((item) => item.id === Number(absenceId));
+        state.data = action === 'delete'
+          ? (await api(`/api/teacher/absences/${absenceId}`, { method: 'DELETE' })).dashboard
+          : (await api(`/api/teacher/absences/${absenceId}`, { method: 'PUT', body: JSON.stringify({ justified: !absence.justified }) })).dashboard;
+      } else {
+        const db = getDemoDB();
+        if (action === 'delete') db.absences = db.absences.filter((absence) => absence.id !== Number(absenceId));
+        else {
+          const absence = db.absences.find((item) => item.id === Number(absenceId)); absence.justified = !absence.justified;
+        }
+        saveDemoDB(db); state.data = demoTeacherDashboard();
+      }
+      renderAttendance(); renderShell();
+    } catch (error) { toast('Erro na falta', error.message, 'error'); }
+  }
+
+  async function saveSettings(form) {
+    const values = Object.fromEntries(new FormData(form));
+    values.contentProtection = values.contentProtection === '1';
+    try {
+      if (state.mode === 'server') state.data = (await api('/api/teacher/settings', { method: 'PUT', body: JSON.stringify(values) })).dashboard;
+      else {
+        const db = getDemoDB();
+        Object.assign(db.settings, { school_name: values.schoolName, course_name: values.courseName, weekly_minimum_percent: Number(values.weeklyMinimumPercent), live_minimum_percent: Number(values.liveMinimumPercent), live_room_url: values.liveRoomUrl, timezone: values.timezone, content_protection: values.contentProtection });
+        saveDemoDB(db); state.data = demoTeacherDashboard();
+      }
+      renderSettings(); toast('Configurações salvas');
+    } catch (error) { toast('Erro ao salvar', error.message, 'error'); }
+  }
+
+  function setupEventDelegation() {
+    document.addEventListener('click', async (event) => {
+      const pageButton = event.target.closest('[data-page]');
+      if (pageButton) return navigate(pageButton.dataset.page);
+      const actionButton = event.target.closest('[data-action]');
+      const openActivityButton = event.target.closest('[data-open-activity]');
+      const openUnitButton = event.target.closest('[data-open-unit]');
+      const openLessonButton = event.target.closest('[data-open-lesson]');
+      const reportButton = event.target.closest('[data-report-student]');
+      const optionButton = event.target.closest('[data-select-option]');
+      const speakButton = event.target.closest('[data-speak]');
+      if (openActivityButton) {
+        const found = findActivity(Number(openActivityButton.dataset.openActivity));
+        state.activeActivityId = found?.activity.id;
+        return navigate(found?.activity.type === 'pronunciation' ? 'pronunciation' : 'writing', { activityId: state.activeActivityId });
+      }
+      if (openUnitButton) {
+        state.activeUnitId = Number(openUnitButton.dataset.openUnit);
+        renderUnits();
+        setTimeout(() => $('#unit-lessons')?.scrollIntoView({ behavior: 'smooth' }), 50);
         return;
       }
-      view.innerHTML = empty('Não foi possível abrir esta tela', error.message, `<button id="retry" class="button primary">Tentar novamente</button>`);
-      $('#retry')?.addEventListener('click', () => navigate(route, data, true));
-    }
+      if (openLessonButton) return navigate('units', { lessonId: Number(openLessonButton.dataset.openLesson) });
+      if (event.target.closest('[data-back-units]')) { state.activeLessonId = null; return navigate('units'); }
+      if (reportButton) return navigate('reports', { studentId: Number(reportButton.dataset.reportStudent) });
+      if (optionButton) {
+        $$('.option-button').forEach((button) => button.classList.remove('is-selected'));
+        optionButton.classList.add('is-selected');
+        $('#activity-answer').value = optionButton.dataset.selectOption;
+        return;
+      }
+      if (speakButton) {
+        speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(speakButton.dataset.speak);
+        utterance.lang = 'en-US'; utterance.rate = .84;
+        speechSynthesis.speak(utterance);
+        return;
+      }
+      if (!actionButton) return;
+      const action = actionButton.dataset.action;
+      if (action === 'close-modal') return closeModal();
+      if (action === 'new-student') return modalNewStudent();
+      if (action === 'edit-student') return updateStudentAction('edit', actionButton.dataset.studentId);
+      if (action === 'toggle-student') return updateStudentAction('toggle', actionButton.dataset.studentId);
+      if (action === 'new-link') return updateStudentAction('new-link', actionButton.dataset.studentId);
+      if (action === 'delete-student') return updateStudentAction('delete', actionButton.dataset.studentId);
+      if (action === 'copy-link') {
+        const student = state.data.students.find((item) => item.id === Number(actionButton.dataset.studentId));
+        await navigator.clipboard.writeText(studentLink(student.access_token));
+        return toast('Link copiado', student.email);
+      }
+      if (action === 'copy-all-links') {
+        const text = state.data.students.map((student) => `${student.name}: ${studentLink(student.access_token)}`).join('\n');
+        await navigator.clipboard.writeText(text); return toast('Links copiados', 'A lista da turma foi copiada.');
+      }
+      if (action === 'new-unit') return modalNewUnit();
+      if (action === 'edit-unit') return modalNewUnit(state.data.units.find((unit) => unit.id === Number(actionButton.dataset.unitId)));
+      if (action === 'delete-unit') return deleteUnit(Number(actionButton.dataset.unitId));
+      if (action === 'new-lesson') return modalNewLesson();
+      if (action === 'new-activity') return modalNewActivity(actionButton.dataset.lessonId || '');
+      if (action === 'view-lesson') return navigate('units', { lessonId: Number(actionButton.dataset.lessonId) });
+      if (action === 'new-notice') return modalNewNotice();
+      if (action === 'new-live-class') return modalNewLiveClass();
+      if (action === 'new-live-question') return modalNewLiveQuestion(Number(actionButton.dataset.liveId));
+      if (action === 'publish-question') return toggleQuestion(Number(actionButton.dataset.questionId), 'published');
+      if (action === 'release-answers') return toggleQuestion(Number(actionButton.dataset.questionId), 'answers');
+      if (action === 'view-live-answers') return showLiveAnswers(Number(actionButton.dataset.questionId));
+      if (action === 'select-speaking-student') return selectSpeakingStudent(Number(actionButton.dataset.questionId), Number(actionButton.dataset.studentId));
+      if (action === 'select-speaking-from-list') return selectSpeakingStudent(Number(actionButton.dataset.questionId), Number($('#speaking-student-select').value));
+      if (action === 'justify-absence') return updateAbsence(Number(actionButton.dataset.absenceId), 'justify');
+      if (action === 'delete-absence') return updateAbsence(Number(actionButton.dataset.absenceId), 'delete');
+      if (action === 'print-report') return window.print();
+      if (action === 'load-full-report') return showFullReport(Number(actionButton.dataset.studentId));
+    });
+
+    document.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (event.target.id === 'login-form') return handleLogin(event);
+      if (event.target.id === 'activity-form') return submitActivity(event.target);
+      if (event.target.id === 'live-answer-form') return submitLiveAnswer(event.target);
+      if (event.target.id === 'student-form') return saveStudent(event.target);
+      if (event.target.id === 'unit-form') return saveUnit(event.target);
+      if (event.target.id === 'lesson-form') return saveLesson(event.target);
+      if (event.target.id === 'activity-create-form') return saveActivity(event.target);
+      if (event.target.id === 'notice-form') return saveNotice(event.target);
+      if (event.target.id === 'live-class-form') return saveLiveClass(event.target);
+      if (event.target.id === 'live-question-form') return saveLiveQuestion(event.target);
+      if (event.target.id === 'settings-form') return saveSettings(event.target);
+    });
+
+    document.addEventListener('input', (event) => {
+      if (event.target.id === 'student-search') {
+        const query = event.target.value.trim().toLowerCase();
+        $$('[data-student-row]').forEach((row) => row.classList.toggle('is-hidden', !row.dataset.search.includes(query)));
+      }
+    });
+
+    document.addEventListener('click', (event) => {
+      if (event.target.id === 'content-protection-switch' || event.target.id === 'activity-required-switch') {
+        const button = event.target;
+        button.classList.toggle('is-on');
+        const hidden = button.parentElement.querySelector('input[type="hidden"]');
+        if (hidden) hidden.value = button.classList.contains('is-on') ? '1' : '0';
+      }
+    });
   }
 
-  function activityRow(activity) {
-    const done = Boolean(activity.submitted_at);
-    return `<article class="list-item">
-      <div class="list-main"><span class="list-icon">${activityIcon(activity.type)}</span><div><h4>${escapeHtml(activity.title)}</h4><p>${escapeHtml(activity.unit_title || '')}${activity.lesson_title ? ` • ${escapeHtml(activity.lesson_title)}` : ''}</p><small>${typeLabel(activity.type)} • prazo ${formatDate(activity.deadline)}</small></div></div>
-      <div class="actions"><span class="badge ${done ? '' : 'orange'}">${done ? `Concluída • ${Number(activity.score || 0).toFixed(1)}` : 'Pendente'}</span><button class="button ${done ? 'ghost' : 'primary'}" data-activity="${activity.id}">${done ? 'Revisar' : 'Fazer'}</button></div>
-    </article>`;
-  }
-
-  function bindActivityButtons() {
-    $$('[data-activity]').forEach(button => button.onclick = () => openActivity(Number(button.dataset.activity)));
-  }
-
-  async function findActivity(id) {
-    const week = await api('/api/student/week');
-    let activity = week.activities.find(item => Number(item.id) === Number(id));
-    if (activity) return activity;
-    const units = await api('/api/student/units');
-    for (const unit of units.units) {
-      const detail = await api(`/api/student/units/${unit.id}`);
-      for (const lesson of detail.lessons) {
-        activity = lesson.activities.find(item => Number(item.id) === Number(id));
-        if (activity) return { ...activity, lesson_title: lesson.title, unit_title: detail.unit.title };
-      }
-    }
-    throw new Error('Atividade não encontrada.');
-  }
-
-  async function openActivity(id) {
-    stopTimers();
-    state.route = 'activity';
-    renderNavigation();
-    loading('Abrindo atividade...');
-    const activity = await findActivity(id);
-    setPage(activity.type === 'pronunciation' ? 'Atividade de pronúncia' : 'Atividade escrita', activity.unit_title || 'Atividade');
-    renderActivity(activity);
-  }
-
-  function renderActivity(activity) {
-    const options = Array.isArray(activity.options) ? activity.options : [];
-    let control = '';
-    if (activity.type === 'multiple_choice') {
-      control = `<div class="option-list">${options.map((option, index) => `<label class="option"><input type="radio" name="answer" value="${escapeHtml(option)}"> <span>${escapeHtml(option)}</span></label>`).join('')}</div>`;
-    } else if (activity.type === 'pronunciation') {
-      control = `<div class="pronunciation-box"><span class="eyebrow dark">Leia em voz alta</span><div class="phrase">${escapeHtml(activity.pronunciation_target || activity.correct_answer || activity.prompt)}</div><button id="pronunciation-mic" class="mic-button" type="button">🎙</button><p id="record-status" class="muted">Clique para gravar. O navegador também tentará reconhecer a frase.</p><div id="recognized-text"></div></div>`;
-    } else {
-      control = `${activity.media_url ? `<audio controls src="${escapeHtml(activity.media_url)}"></audio>` : ''}<label class="field"><span>Sua resposta</span><textarea id="activity-answer" placeholder="Digite sua resposta aqui..."></textarea></label>`;
-    }
-    view.innerHTML = `<div class="page-header"><div><h2>${escapeHtml(activity.title)}</h2><p>${typeLabel(activity.type)} • vale ${activity.points} pontos</p></div><button id="back-week" class="button ghost">← Voltar</button></div>
-      <section class="card activity-card"><span class="badge">${typeLabel(activity.type)}</span><h3 style="margin-top:16px">${escapeHtml(activity.prompt)}</h3>${control}<div id="activity-feedback"></div><div class="actions" style="margin-top:20px"><button id="submit-activity" class="button primary">Enviar resposta</button></div></section>`;
-    $('#back-week').onclick = () => navigate('week');
-    let recordedBlob = null;
-    if (activity.type === 'pronunciation') {
-      $('#pronunciation-mic').onclick = async () => {
-        if (state.mediaRecorder?.state === 'recording') {
-          state.mediaRecorder.stop();
-          return;
-        }
-        try {
-          state.transcript = '';
-          recordedBlob = null;
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          state.mediaChunks = [];
-          state.mediaRecorder = new MediaRecorder(stream);
-          state.mediaRecorder.ondataavailable = event => { if (event.data.size) state.mediaChunks.push(event.data); };
-          state.mediaRecorder.onstop = () => {
-            recordedBlob = new Blob(state.mediaChunks, { type: state.mediaRecorder.mimeType || 'audio/webm' });
-            stream.getTracks().forEach(track => track.stop());
-            $('#pronunciation-mic').classList.remove('recording');
-            $('#record-status').textContent = 'Gravação concluída. Agora envie a resposta.';
-          };
-          const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-          if (Recognition) {
-            const recognition = new Recognition();
-            recognition.lang = 'en-US';
-            recognition.interimResults = false;
-            recognition.onresult = event => {
-              state.transcript = event.results[0][0].transcript;
-              $('#recognized-text').innerHTML = `<div class="feedback">O navegador reconheceu: “${escapeHtml(state.transcript)}”</div>`;
-            };
-            recognition.onerror = () => {};
-            recognition.start();
-          }
-          state.mediaRecorder.start();
-          $('#pronunciation-mic').classList.add('recording');
-          $('#record-status').textContent = 'Gravando... clique novamente para parar.';
-          setTimeout(() => { if (state.mediaRecorder?.state === 'recording') state.mediaRecorder.stop(); }, 9000);
-        } catch {
-          toast('Permita o uso do microfone no navegador.', 'error');
-        }
-      };
-    }
-    $('#submit-activity').onclick = async () => {
-      try {
-        const form = new FormData();
-        let answer = '';
-        if (activity.type === 'multiple_choice') answer = $('input[name="answer"]:checked')?.value || '';
-        else if (activity.type === 'pronunciation') answer = state.transcript;
-        else answer = $('#activity-answer')?.value.trim() || '';
-        if (!answer && !recordedBlob) return toast('Responda a atividade antes de enviar.', 'error');
-        form.append('answer', answer);
-        form.append('transcript', state.transcript || answer);
-        if (recordedBlob) form.append('audio', recordedBlob, 'pronuncia.webm');
-        const result = await api(`/api/student/activities/${activity.id}/submit`, { method: 'POST', body: form });
-        $('#activity-feedback').innerHTML = `<div class="feedback ${result.isCorrect ? '' : 'error'}"><strong>${result.isCorrect ? 'Resposta correta!' : 'Confira novamente'}</strong><br>${escapeHtml(result.feedback)}<br>Nota: ${Number(result.score).toFixed(1)}</div>`;
-        toast('Atividade salva.');
-      } catch (error) { toast(error.message, 'error'); }
-    };
-  }
-
-  const studentRoutes = {
-    async home() {
-      setPage('Página inicial', 'Área do aluno');
-      const data = await api('/api/student/dashboard');
-      view.innerHTML = `<div class="page-header"><div><h2>Olá, ${escapeHtml(state.user.name.split(' ')[0])}!</h2><p>Veja somente o que precisa da sua atenção esta semana.</p></div><span class="badge">${escapeHtml(data.week)}</span></div>
-        <section class="grid four">
-          <article class="card stat-card"><span class="stat-label">Progresso do curso</span><b class="stat-value">${data.stats.progress}%</b><span class="stat-note">${data.stats.completed} de ${data.stats.total} atividades</span></article>
-          <article class="card stat-card"><span class="stat-label">Média das notas</span><b class="stat-value">${data.stats.grade}</b><span class="stat-note">Média das entregas</span></article>
-          <article class="card stat-card"><span class="stat-label">Faltas</span><b class="stat-value">${data.stats.absences}</b><span class="stat-note">Sem justificativa</span></article>
-          <article class="card stat-card"><span class="stat-label">Atividades da semana</span><b class="stat-value">${data.weekly.filter(a => !a.submitted_at).length}</b><span class="stat-note">Pendentes</span></article>
-        </section>
-        <div class="section-title"><h2>Atividades da semana</h2><button class="button ghost" data-go="week">Ver todas</button></div>
-        <section class="list">${data.weekly.slice(0, 4).map(activityRow).join('') || empty('Tudo concluído', 'Não há atividades pendentes nesta semana.')}</section>
-        <section class="grid two" style="margin-top:28px">
-          <article class="card"><span class="eyebrow dark">Próxima aula ao vivo</span>${data.live ? `<h3 style="margin-top:12px">${escapeHtml(data.live.title)}</h3><p>${formatDate(data.live.starts_at)}</p><p class="muted">${escapeHtml(data.live.description || '')}</p><button class="button primary" data-go="live">Abrir aula ao vivo</button>` : '<p>Nenhuma aula agendada.</p>'}</article>
-          <article class="card"><span class="eyebrow dark">Avisos do professor</span><div class="list" style="margin-top:12px">${data.notices.map(n => `<div class="notice"><strong>${escapeHtml(n.title)}</strong><p>${escapeHtml(n.message)}</p></div>`).join('') || '<p>Nenhum aviso.</p>'}</div></article>
-        </section>`;
-      bindActivityButtons();
-      $$('[data-go]').forEach(button => button.onclick = () => navigate(button.dataset.go));
-    },
-
-    async week() {
-      setPage('Atividades da semana', 'Área do aluno');
-      const data = await api('/api/student/week');
-      const completed = data.activities.filter(a => a.submitted_at).length;
-      const percent = data.activities.length ? Math.round(completed * 100 / data.activities.length) : 0;
-      view.innerHTML = `<div class="page-header"><div><h2>Atividades da semana</h2><p>Você recebe apenas uma presença online pelo conjunto obrigatório da semana.</p></div><span class="badge">${escapeHtml(data.week)}</span></div>
-        <article class="card soft"><div class="section-title" style="margin:0 0 10px"><h3>${completed} de ${data.activities.length} concluídas</h3><strong>${percent}%</strong></div><div class="progress-track"><div class="progress-bar" style="width:${percent}%"></div></div></article>
-        <div class="list" style="margin-top:20px">${data.activities.map(activityRow).join('') || empty('Nenhuma atividade', 'O professor ainda não publicou tarefas para esta semana.')}</div>`;
-      bindActivityButtons();
-    },
-
-    async units() {
-      setPage('Unidades do curso', 'Conteúdo e aulas');
-      const data = await api('/api/student/units');
-      view.innerHTML = `<div class="page-header"><div><h2>Unidades e aulas</h2><p>Conteúdo organizado sem menus desnecessários.</p></div></div><section class="grid two">${data.units.map(unit => `<article class="card unit-card"><span class="badge">Unidade ${unit.position}</span><h3 style="margin-top:15px">${escapeHtml(unit.title)}</h3><p class="muted">${escapeHtml(unit.description || '')}</p><button class="button primary" data-unit="${unit.id}">Abrir unidade</button></article>`).join('')}</section>`;
-      $$('[data-unit]').forEach(button => button.onclick = () => studentRoutes.unit({ id: Number(button.dataset.unit) }));
-    },
-
-    async unit(data) {
-      const result = await api(`/api/student/units/${data.id}`);
-      setPage(result.unit.title, 'Unidade e conteúdo da aula');
-      view.innerHTML = `<div class="page-header"><div><h2>${escapeHtml(result.unit.title)}</h2><p>${escapeHtml(result.unit.description || '')}</p></div><button id="back-units" class="button ghost">← Unidades</button></div>
-        <div class="grid">${result.lessons.map(lesson => `<section class="card"><span class="eyebrow dark">Aula ${lesson.position}</span><h3 style="font-size:1.5rem;margin-top:12px">${escapeHtml(lesson.title)}</h3><div class="lesson-content">${escapeHtml(lesson.content || '').replace(/\n/g, '<br>')}</div>${lesson.video_url ? `<div class="media-frame" style="margin-top:18px"><iframe src="${escapeHtml(lesson.video_url)}" allowfullscreen></iframe></div>` : ''}${lesson.image_url ? `<img style="max-width:100%;border-radius:18px;margin-top:18px" src="${escapeHtml(lesson.image_url)}" alt="Imagem da aula">` : ''}${lesson.audio_url ? `<audio style="width:100%;margin-top:18px" controls src="${escapeHtml(lesson.audio_url)}"></audio>` : ''}<div class="section-title"><h3>Atividades</h3></div><div class="list">${lesson.activities.map(a => activityRow({ ...a, unit_title: result.unit.title, lesson_title: lesson.title })).join('')}</div></section>`).join('')}</div>`;
-      $('#back-units').onclick = () => navigate('units');
-      bindActivityButtons();
-    },
-
-    async live() {
-      setPage('Aula ao vivo', 'Conversação e interação');
-      let lastSignature = '';
-      const render = async (force = false) => {
-        const data = await api('/api/student/live');
-        const signature = JSON.stringify({ live: data.live?.id, question: data.question?.id, revealed: data.question?.revealed, chosen: data.question?.chosen_student_id, answered: data.myAnswer?.id, answers: data.classAnswers?.length || 0 });
-        if (!force && signature === lastSignature) return;
-        lastSignature = signature;
-        if (!data.live) {
-          view.innerHTML = empty('Nenhuma aula agendada', 'O professor ainda não marcou a próxima aula ao vivo.');
-          return;
-        }
-        await api(`/api/student/live/${data.live.id}/join`, { method: 'POST', body: {} });
-        const question = data.question;
-        let questionHtml = '<p class="muted">Aguardando o professor publicar uma pergunta.</p>';
-        if (question) {
-          const elapsed = Math.floor((Date.now() - new Date(question.created_at).getTime()) / 1000);
-          const remaining = Math.max(0, Number(question.seconds_to_answer) - elapsed);
-          const releasedAnswers = Number(question.revealed)
-            ? `<div class="released-answers"><h4>Respostas da turma</h4>${(data.classAnswers || []).map(answer => `<div class="released-answer"><strong>${escapeHtml(answer.student_name)}</strong><span>${escapeHtml(answer.answer_text || 'Resposta em áudio')}</span>${answer.audio_path ? `<audio controls src="${escapeHtml(answer.audio_path)}"></audio>` : ''}</div>`).join('') || '<p class="muted">Nenhuma resposta foi enviada.</p>'}</div>`
-            : '';
-          questionHtml = `<div class="question-box"><span class="eyebrow dark">Pergunta do professor</span><h3>${escapeHtml(question.prompt)}</h3><div class="timer" data-timer="${remaining}">${remaining}s</div>${data.myAnswer ? `<div class="feedback">Sua resposta foi enviada. As respostas dos colegas ficam ocultas até o professor liberar.</div>` : `<label class="field"><span>Sua resposta</span><textarea id="live-answer"></textarea></label><div class="actions"><button id="send-live-answer" class="button primary">Enviar por texto</button><button id="record-live-answer" class="button secondary">Gravar áudio</button></div>`}${question.chosen_student_name ? `<p><strong>Aluno escolhido para responder:</strong> ${escapeHtml(question.chosen_student_name)}</p>` : ''}${Number(question.revealed) ? `<div class="feedback"><strong>Resposta correta:</strong> ${escapeHtml(question.correct_answer || 'Resposta liberada pelo professor.')}</div>${releasedAnswers}` : ''}</div>`;
-        }
-        view.innerHTML = `<div class="page-header"><div><h2>${escapeHtml(data.live.title)}</h2><p>${formatDate(data.live.starts_at)} • presença registrada automaticamente</p></div><span class="badge ${data.live.status === 'live' ? '' : 'orange'}">${data.live.status === 'live' ? 'Ao vivo' : 'Agendada'}</span></div><div class="live-grid"><iframe class="live-frame" src="${escapeHtml(data.live.room_url)}" allow="camera; microphone; fullscreen; display-capture"></iframe><aside class="card"><h3>Interação da aula</h3><p class="muted">As respostas dos colegas só aparecem quando o professor liberar.</p>${questionHtml}</aside></div>`;
-        if (!state.heartbeat) state.heartbeat = setInterval(() => api(`/api/student/live/${data.live.id}/heartbeat`, { method: 'POST', body: {} }).catch(() => {}), 15000);
-        const timer = $('[data-timer]');
-        if (timer) {
-          let seconds = Number(timer.dataset.timer);
-          const countdown = setInterval(() => { seconds = Math.max(0, seconds - 1); timer.textContent = `${seconds}s`; if (!seconds) clearInterval(countdown); }, 1000);
-        }
-        let audioBlob = null;
-        $('#record-live-answer')?.addEventListener('click', async event => {
-          try {
-            if (state.mediaRecorder?.state === 'recording') { state.mediaRecorder.stop(); return; }
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const chunks = [];
-            state.mediaRecorder = new MediaRecorder(stream);
-            state.mediaRecorder.ondataavailable = e => chunks.push(e.data);
-            state.mediaRecorder.onstop = () => { audioBlob = new Blob(chunks, { type: 'audio/webm' }); stream.getTracks().forEach(t => t.stop()); event.target.textContent = 'Áudio gravado ✓'; };
-            state.mediaRecorder.start();
-            event.target.textContent = 'Parar gravação';
-            setTimeout(() => { if (state.mediaRecorder?.state === 'recording') state.mediaRecorder.stop(); }, 12000);
-          } catch { toast('Permita o uso do microfone.', 'error'); }
-        });
-        $('#send-live-answer')?.addEventListener('click', async () => {
-          const form = new FormData();
-          form.append('answer', $('#live-answer').value.trim());
-          if (audioBlob) form.append('audio', audioBlob, 'resposta.webm');
-          await api(`/api/student/questions/${question.id}/answer`, { method: 'POST', body: form });
-          toast('Resposta enviada.');
-          render();
-        });
-      };
-      await render(true);
-      state.interval = setInterval(() => render(false).catch(() => {}), 5000);
-    },
-
-    async progress() {
-      setPage('Progresso, notas e faltas', 'Acompanhamento');
-      const data = await api('/api/student/progress');
-      view.innerHTML = `<div class="page-header"><div><h2>Seu acompanhamento</h2><p>Veja notas, tentativas e faltas registradas.</p></div></div>
-        <section class="grid three"><article class="card stat-card"><span class="stat-label">Progresso</span><b class="stat-value">${data.stats.progress}%</b></article><article class="card stat-card"><span class="stat-label">Média</span><b class="stat-value">${data.stats.grade}</b></article><article class="card stat-card"><span class="stat-label">Faltas</span><b class="stat-value">${data.stats.absences}</b></article></section>
-        <div class="section-title"><h2>Notas e tentativas</h2></div><div class="table-wrap"><table><thead><tr><th>Atividade</th><th>Tipo</th><th>Nota</th><th>Tentativas</th><th>Data</th></tr></thead><tbody>${data.submissions.map(s => `<tr><td><strong>${escapeHtml(s.activity_title)}</strong><br><small>${escapeHtml(s.unit_title)}</small></td><td>${typeLabel(s.type)}</td><td>${Number(s.score).toFixed(1)}</td><td>${s.attempts}</td><td>${formatDate(s.submitted_at)}</td></tr>`).join('') || '<tr><td colspan="5">Nenhuma entrega.</td></tr>'}</tbody></table></div>
-        <div class="section-title"><h2>Faltas</h2></div><div class="list">${data.absences.map(a => `<article class="list-item"><div><strong>${a.kind === 'live' ? 'Falta na aula ao vivo' : 'Falta online semanal'}</strong><p>${escapeHtml(a.reason || '')}</p></div><span class="badge ${Number(a.justified) ? '' : 'red'}">${Number(a.justified) ? 'Justificada' : 'Não justificada'}</span></article>`).join('') || '<div class="card"><p>Nenhuma falta registrada.</p></div>'}</div>`;
-    },
-
-    async notices() {
-      setPage('Avisos', 'Mensagens do professor');
-      const data = await api('/api/student/notices');
-      view.innerHTML = `<div class="page-header"><div><h2>Avisos do professor</h2><p>Informações gerais e mensagens enviadas especialmente para você.</p></div></div><div class="grid">${data.notices.map(n => `<article class="card notice"><span class="badge">${formatDate(n.created_at)}</span><h3 style="margin-top:14px">${escapeHtml(n.title)}</h3><p>${escapeHtml(n.message)}</p></article>`).join('') || empty('Nenhum aviso', 'Você não possui mensagens no momento.')}</div>`;
-    },
-
-    async profile() {
-      setPage('Perfil do aluno', 'Minha conta');
-      const data = await api('/api/student/profile');
-      const fullLink = `${location.origin}${data.link}`;
-      view.innerHTML = `<div class="page-header"><div><h2>Meu perfil</h2><p>Seus dados e seu link individual de acesso.</p></div></div><section class="grid two"><article class="card"><form id="profile-form" class="form-stack"><label><span>Nome</span><input name="name" value="${escapeHtml(state.user.name)}"></label><label><span>E-mail</span><input value="${escapeHtml(state.user.email)}" disabled></label><label><span>Nova senha</span><input name="password" type="password" placeholder="Deixe vazio para não alterar"></label><button class="button primary">Salvar alterações</button></form></article><article class="card soft"><span class="eyebrow dark">Link individual</span><h3 style="margin-top:12px">Acesso protegido</h3><p class="muted">Este link só funciona com o seu e-mail cadastrado.</p><input id="student-link" readonly value="${escapeHtml(fullLink)}"><button id="copy-link" class="button secondary" style="margin-top:12px">Copiar link</button><p class="small muted">Ao entrar em outro aparelho, a sessão anterior é encerrada.</p></article></section>`;
-      $('#profile-form').onsubmit = async event => {
-        event.preventDefault();
-        const form = new FormData(event.target);
-        await api('/api/student/profile', { method: 'PUT', body: Object.fromEntries(form) });
-        toast('Perfil atualizado. Entre novamente para ver todas as alterações.');
-      };
-      $('#copy-link').onclick = async () => { await navigator.clipboard.writeText(fullLink); toast('Link copiado.'); };
-    }
-  };
-
-  const teacherRoutes = {
-    async 'teacher-dashboard'() {
-      setPage('Painel inicial do professor', 'Administração');
-      const data = await api('/api/teacher/dashboard');
-      view.innerHTML = `<div class="page-header"><div><h2>Visão geral da turma</h2><p>Acompanhe somente os dados importantes para o curso.</p></div><button class="button primary" data-go="builder">+ Criar atividade</button></div>
-        <section class="grid four"><article class="card stat-card"><span class="stat-label">Alunos ativos</span><b class="stat-value">${data.cards.students}</b></article><article class="card stat-card"><span class="stat-label">Atividades</span><b class="stat-value">${data.cards.activities}</b></article><article class="card stat-card"><span class="stat-label">Entregas</span><b class="stat-value">${data.cards.submissions}</b></article><article class="card stat-card"><span class="stat-label">Faltas pendentes</span><b class="stat-value">${data.cards.absences}</b></article></section>
-        <section class="grid two" style="margin-top:24px"><article class="card"><span class="eyebrow dark">Próxima aula</span>${data.live ? `<h3 style="margin-top:12px">${escapeHtml(data.live.title)}</h3><p>${formatDate(data.live.starts_at)}</p><p class="muted">${escapeHtml(data.live.description || '')}</p><button class="button primary" data-go="teacher-live">Gerenciar aula</button>` : '<p>Nenhuma aula marcada.</p>'}</article><article class="card"><span class="eyebrow dark">Acesso rápido</span><div class="actions" style="margin-top:16px"><button class="button secondary" data-go="students">Cadastrar aluno</button><button class="button secondary" data-go="attendance">Ver faltas</button><button class="button secondary" data-go="reports">Relatórios</button></div></article></section>
-        <div class="section-title"><h2>Progresso dos alunos</h2></div><div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Progresso</th><th>Média</th><th>Faltas</th><th>Status</th></tr></thead><tbody>${data.students.map(s => `<tr><td><strong>${escapeHtml(s.name)}</strong><br><small>${escapeHtml(s.email)}</small></td><td><div class="progress-track"><div class="progress-bar" style="width:${s.progress}%"></div></div><small>${s.progress}%</small></td><td>${s.grade}</td><td>${s.absences}</td><td><span class="badge ${Number(s.active) ? '' : 'red'}">${Number(s.active) ? 'Ativo' : 'Bloqueado'}</span></td></tr>`).join('')}</tbody></table></div>
-        <div class="section-title"><div><h2>Entregas da semana</h2><p class="muted">${escapeHtml(data.currentWeek || '')} • veja quem entregou, atrasou ou ainda não realizou.</p></div></div><div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Entregou</th><th>Atrasadas</th><th>Não realizadas</th><th>Situação</th></tr></thead><tbody>${data.students.map(s => `<tr><td><strong>${escapeHtml(s.name)}</strong></td><td>${s.delivered} de ${s.weeklyTotal}</td><td>${s.late}</td><td>${s.missing}</td><td><span class="badge ${s.missing ? 'orange' : s.late ? 'red' : ''}">${s.missing ? 'Pendente' : s.late ? 'Entregou com atraso' : 'Em dia'}</span></td></tr>`).join('')}</tbody></table></div>`;
-      $$('[data-go]').forEach(button => button.onclick = () => navigate(button.dataset.go));
-    },
-
-    async students() {
-      setPage('Cadastro de alunos', 'Administração');
-      const data = await api('/api/teacher/students');
-      view.innerHTML = `<div class="page-header"><div><h2>Alunos e links individuais</h2><p>Cadastre, edite, bloqueie, remova e gere um link exclusivo.</p></div><button id="new-student" class="button primary">+ Novo aluno</button></div>
-        <div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Progresso</th><th>Link individual</th><th>Status</th><th>Ações</th></tr></thead><tbody>${data.students.map(s => `<tr><td><strong>${escapeHtml(s.name)}</strong><br><small>${escapeHtml(s.email)}</small></td><td>${s.progress}% • média ${s.grade}</td><td><button class="text-button" data-copy="${escapeHtml(`${location.origin}/index.html?token=${s.access_token}`)}">Copiar link</button></td><td><span class="badge ${Number(s.active) ? '' : 'red'}">${Number(s.active) ? 'Ativo' : 'Bloqueado'}</span></td><td><div class="actions"><button class="button ghost" data-edit-student="${s.id}">Editar</button><button class="button secondary" data-new-link="${s.id}">Novo link</button><button class="button danger" data-delete-student="${s.id}">Remover</button></div></td></tr>`).join('')}</tbody></table></div>`;
-      $('#new-student').onclick = () => openStudentForm();
-      $$('[data-copy]').forEach(button => button.onclick = async () => { await navigator.clipboard.writeText(button.dataset.copy); toast('Link copiado.'); });
-      $$('[data-edit-student]').forEach(button => {
-        const student = data.students.find(s => Number(s.id) === Number(button.dataset.editStudent));
-        button.onclick = () => openStudentForm(student);
-      });
-      $$('[data-new-link]').forEach(button => button.onclick = async () => {
-        if (!confirm('Gerar um novo link? O link anterior deixará de funcionar.')) return;
-        const result = await api(`/api/teacher/students/${button.dataset.newLink}/new-link`, { method: 'POST', body: {} });
-        await navigator.clipboard.writeText(`${location.origin}${result.link}`);
-        toast('Novo link gerado e copiado.');
-        navigate('students', {}, true);
-      });
-      $$('[data-delete-student]').forEach(button => button.onclick = async () => {
-        if (!confirm('Remover este aluno e seus dados?')) return;
-        await api(`/api/teacher/students/${button.dataset.deleteStudent}`, { method: 'DELETE' });
-        toast('Aluno removido.');
-        navigate('students', {}, true);
-      });
-
-      function openStudentForm(student = null) {
-        const close = modal(student ? 'Editar aluno' : 'Cadastrar aluno', `<form id="student-form" class="form-grid"><label><span>Nome completo</span><input name="name" value="${escapeHtml(student?.name || '')}" required></label><label><span>E-mail</span><input name="email" type="email" value="${escapeHtml(student?.email || '')}" required></label><label><span>${student ? 'Nova senha (opcional)' : 'Senha inicial'}</span><input name="password" type="text" value="${student ? '' : 'Aluno123'}"></label>${student ? `<label><span>Status</span><select name="active"><option value="1" ${Number(student.active) ? 'selected' : ''}>Ativo</option><option value="0" ${!Number(student.active) ? 'selected' : ''}>Bloqueado</option></select></label>` : ''}</form>`, `<button class="button ghost modal-cancel">Cancelar</button><button class="button primary" id="save-student">Salvar</button>`);
-        $('.modal-cancel').onclick = close;
-        $('#save-student').onclick = async () => {
-          const form = $('#student-form');
-          if (!form.reportValidity()) return;
-          const payload = Object.fromEntries(new FormData(form));
-          if (student) {
-            payload.active = payload.active === '1';
-            await api(`/api/teacher/students/${student.id}`, { method: 'PUT', body: payload });
-            toast('Aluno atualizado.');
-          } else {
-            const result = await api('/api/teacher/students', { method: 'POST', body: payload });
-            const fullLink = `${location.origin}${result.link}`;
-            await navigator.clipboard.writeText(fullLink);
-            toast('Aluno criado. O link foi copiado.');
-          }
-          close();
-          navigate('students', {}, true);
-        };
-      }
-    },
-
-    async builder() {
-      setPage('Criação de aulas e atividades', 'Conteúdo do curso');
-      const data = await api('/api/teacher/curriculum');
-      const unitOptions = data.units.map(u => `<option value="${u.id}">${escapeHtml(u.title)}</option>`).join('');
-      const lessons = data.units.flatMap(u => u.lessons.map(l => ({ ...l, unitTitle: u.title })));
-      const lessonOptions = lessons.map(l => `<option value="${l.id}">${escapeHtml(l.unitTitle)} • ${escapeHtml(l.title)}</option>`).join('');
-      view.innerHTML = `<div class="page-header"><div><h2>Aulas e atividades</h2><p>Crie somente o conteúdo necessário para cada unidade.</p></div><span class="badge">Semana ${escapeHtml(data.week)}</span></div>
-        <section class="grid three">
-          <article class="card"><span class="eyebrow dark">1. Unidade</span><form id="unit-form" class="form-stack" style="margin-top:15px"><label><span>Título</span><input name="title" required placeholder="Unit 2 — At work"></label><label><span>Descrição</span><textarea name="description"></textarea></label><button class="button primary">Criar unidade</button></form></article>
-          <article class="card"><span class="eyebrow dark">2. Aula</span><form id="lesson-form" class="form-stack" style="margin-top:15px"><label><span>Unidade</span><select name="unitId" required>${unitOptions}</select></label><label><span>Título da aula</span><input name="title" required></label><label><span>Explicação escrita</span><textarea name="content"></textarea></label><label><span>URL do vídeo</span><input name="videoUrl" placeholder="https://..."></label><label><span>URL da imagem</span><input name="imageUrl" placeholder="Ou envie abaixo"></label><label><span>URL do áudio</span><input name="audioUrl" placeholder="Ou envie abaixo"></label><button class="button primary">Criar aula</button></form></article>
-          <article class="card"><span class="eyebrow dark">Upload de mídia</span><form id="upload-form" class="form-stack" style="margin-top:15px"><label><span>Vídeo, imagem ou áudio</span><input name="file" type="file" required></label><button class="button secondary">Enviar arquivo</button></form><div id="upload-result"></div></article>
-        </section>
-        <section class="card" style="margin-top:20px"><span class="eyebrow dark">3. Atividade</span><form id="activity-form" class="form-grid" style="margin-top:15px"><label><span>Aula</span><select name="lessonId" required>${lessonOptions}</select></label><label><span>Tipo</span><select name="type"><option value="multiple_choice">Alternativas</option><option value="fill_blank">Completar frase</option><option value="writing">Escrita</option><option value="listening">Escuta</option><option value="pronunciation">Pronúncia</option></select></label><label><span>Título</span><input name="title" required></label><label><span>Prazo</span><input name="deadline" type="datetime-local"></label><label class="full"><span>Pergunta/instrução</span><textarea name="prompt" required></textarea></label><label class="full"><span>Alternativas separadas por |</span><input name="options" placeholder="Opção 1 | Opção 2 | Opção 3"></label><label><span>Resposta correta</span><input name="correctAnswer"></label><label><span>Frase de pronúncia</span><input name="pronunciationTarget"></label><label class="full"><span>Explicação para o erro</span><textarea name="explanation"></textarea></label><label><span>URL de áudio/mídia</span><input name="mediaUrl"></label><label><span>Pontos</span><input name="points" type="number" value="10"></label><label><span>Semana</span><input name="weekKey" value="${escapeHtml(data.week)}"></label><label><span>Obrigatória</span><select name="required"><option value="true">Sim</option><option value="false">Não</option></select></label><div class="full"><button class="button primary">Criar atividade</button></div></form></section>
-        <div class="section-title"><h2>Conteúdo cadastrado</h2></div><div class="grid">${data.units.map(unit => `<article class="card unit-card"><h3>${escapeHtml(unit.title)}</h3><p class="muted">${escapeHtml(unit.description || '')}</p>${unit.lessons.map(lesson => `<div class="card soft" style="margin-top:12px"><strong>${escapeHtml(lesson.title)}</strong><p>${escapeHtml(lesson.content || '')}</p><div class="list">${lesson.activities.map(a => `<div class="list-item"><div class="list-main"><span class="list-icon">${activityIcon(a.type)}</span><div><h4>${escapeHtml(a.title)}</h4><small>${typeLabel(a.type)} • ${a.required ? 'obrigatória' : 'opcional'} • ${formatDate(a.deadline)}</small></div></div></div>`).join('') || '<p class="muted">Nenhuma atividade.</p>'}</div></div>`).join('')}</article>`).join('')}</div>`;
-
-      $('#unit-form').onsubmit = async event => {
-        event.preventDefault();
-        await api('/api/teacher/units', { method: 'POST', body: Object.fromEntries(new FormData(event.target)) });
-        toast('Unidade criada.'); navigate('builder', {}, true);
-      };
-      $('#lesson-form').onsubmit = async event => {
-        event.preventDefault();
-        await api('/api/teacher/lessons', { method: 'POST', body: Object.fromEntries(new FormData(event.target)) });
-        toast('Aula criada.'); navigate('builder', {}, true);
-      };
-      $('#upload-form').onsubmit = async event => {
-        event.preventDefault();
-        const result = await api('/api/teacher/upload', { method: 'POST', body: new FormData(event.target) });
-        $('#upload-result').innerHTML = `<div class="feedback">Arquivo enviado.<br><input readonly value="${escapeHtml(location.origin + result.url)}"></div>`;
-        toast('Mídia enviada. Copie a URL para a aula ou atividade.');
-      };
-      $('#activity-form').onsubmit = async event => {
-        event.preventDefault();
-        const payload = Object.fromEntries(new FormData(event.target));
-        payload.options = String(payload.options || '').split('|').map(v => v.trim()).filter(Boolean);
-        payload.required = payload.required === 'true';
-        if (payload.deadline) payload.deadline = new Date(payload.deadline).toISOString();
-        await api('/api/teacher/activities', { method: 'POST', body: payload });
-        toast('Atividade criada.'); navigate('builder', {}, true);
-      };
-    },
-
-    async 'teacher-live'() {
-      setPage('Aula ao vivo', 'Controle do professor');
-      const render = async () => {
-        const data = await api('/api/teacher/live');
-        if (!data.live) {
-          view.innerHTML = `<div class="page-header"><div><h2>Aula ao vivo</h2><p>Crie o próximo encontro da turma.</p></div></div>${liveCreateForm()}`;
-          bindLiveCreate();
-          return;
-        }
-        const answersVisible = Number(data.question?.revealed);
-        view.innerHTML = `<div class="page-header"><div><h2>${escapeHtml(data.live.title)}</h2><p>${formatDate(data.live.starts_at)} • mínimo ${data.live.minimum_percent}% de participação</p></div><div class="actions"><button id="edit-live" class="button ghost">Editar</button><button id="finish-live" class="button danger">Finalizar e calcular faltas</button></div></div>
-          <div class="live-grid"><iframe class="live-frame" src="${escapeHtml(data.live.room_url)}" allow="camera; microphone; fullscreen; display-capture"></iframe><aside class="card"><span class="eyebrow dark">Pergunta na tela</span>${data.question ? `<h3 style="margin-top:12px">${escapeHtml(data.question.prompt)}</h3><p>Tempo: ${data.question.seconds_to_answer}s</p><div class="actions"><button id="reveal-question" class="button ${answersVisible ? 'secondary' : 'primary'}">${answersVisible ? 'Resposta liberada' : 'Liberar respostas'}</button></div><label class="field" style="margin-top:14px"><span>Escolher aluno para falar</span><select id="chosen-student"><option value="">Nenhum</option>${data.students.map(s => `<option value="${s.id}" ${Number(data.question.chosen_student_id) === Number(s.id) ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}</select></label><button id="save-chosen" class="button ghost" style="margin-top:10px">Salvar escolha</button>` : '<p class="muted">Nenhuma pergunta publicada.</p>'}<hr style="border:0;border-top:1px solid var(--line);margin:22px 0"><form id="question-form" class="form-stack"><label><span>Nova pergunta</span><textarea name="prompt" required></textarea></label><label><span>Resposta correta</span><input name="correctAnswer"></label><label><span>Tempo para responder</span><input name="seconds" type="number" value="30" min="5"></label><button class="button primary">Publicar pergunta</button></form></aside></div>
-          <div class="section-title"><h2>Respostas recebidas</h2><span class="badge ${answersVisible ? '' : 'orange'}">${answersVisible ? 'Liberadas' : 'Ocultas para alunos'}</span></div><div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Resposta</th><th>Áudio</th><th>Horário</th></tr></thead><tbody>${data.answers.map(a => `<tr><td>${escapeHtml(a.student_name)}</td><td>${escapeHtml(a.answer_text || 'Resposta em áudio')}</td><td>${a.audio_path ? `<audio controls src="${escapeHtml(a.audio_path)}"></audio>` : '—'}</td><td>${formatDate(a.submitted_at)}</td></tr>`).join('') || '<tr><td colspan="4">Aguardando respostas.</td></tr>'}</tbody></table></div>`;
-        $('#question-form').onsubmit = async event => {
-          event.preventDefault();
-          await api(`/api/teacher/live/${data.live.id}/questions`, { method: 'POST', body: Object.fromEntries(new FormData(event.target)) });
-          toast('Pergunta publicada para os alunos.'); render();
-        };
-        $('#reveal-question')?.addEventListener('click', async () => {
-          await api(`/api/teacher/questions/${data.question.id}`, { method: 'PUT', body: { revealed: true } });
-          toast('Resposta correta e respostas liberadas.'); render();
-        });
-        $('#save-chosen')?.addEventListener('click', async () => {
-          await api(`/api/teacher/questions/${data.question.id}`, { method: 'PUT', body: { chosenStudentId: $('#chosen-student').value || null } });
-          toast('Aluno escolhido atualizado.'); render();
-        });
-        $('#finish-live').onclick = async () => {
-          if (!confirm('Finalizar a aula e calcular as faltas ao vivo?')) return;
-          await api(`/api/teacher/live/${data.live.id}`, { method: 'PUT', body: { status: 'finished' } });
-          toast('Aula finalizada e presença calculada.'); navigate('attendance');
-        };
-        $('#edit-live').onclick = () => openLiveEdit(data.live);
-      };
-      await render();
-
-      function liveCreateForm() {
-        const start = new Date(Date.now() + 86400000).toISOString().slice(0,16);
-        const end = new Date(Date.now() + 90000000).toISOString().slice(0,16);
-        return `<section class="card"><form id="live-create-form" class="form-grid"><label><span>Título</span><input name="title" required value="Conversation Class"></label><label><span>Status</span><select name="status"><option value="scheduled">Agendada</option><option value="live">Ao vivo agora</option></select></label><label><span>Início</span><input name="startsAt" type="datetime-local" value="${start}" required></label><label><span>Fim</span><input name="endsAt" type="datetime-local" value="${end}" required></label><label><span>Participação mínima (%)</span><input name="minimumPercent" type="number" value="75"></label><label><span>Link da videochamada (opcional)</span><input name="roomUrl" placeholder="Jitsi, Meet ou outro"></label><label class="full"><span>Descrição</span><textarea name="description"></textarea></label><div class="full"><button class="button primary">Criar aula ao vivo</button></div></form></section>`;
-      }
-      function bindLiveCreate() {
-        $('#live-create-form').onsubmit = async event => {
-          event.preventDefault();
-          const payload = Object.fromEntries(new FormData(event.target));
-          payload.startsAt = new Date(payload.startsAt).toISOString();
-          payload.endsAt = new Date(payload.endsAt).toISOString();
-          await api('/api/teacher/live', { method: 'POST', body: payload });
-          toast('Aula criada.'); render();
-        };
-      }
-      function openLiveEdit(live) {
-        const close = modal('Editar aula ao vivo', `<form id="live-edit-form" class="form-grid"><label><span>Título</span><input name="title" value="${escapeHtml(live.title)}"></label><label><span>Status</span><select name="status"><option value="scheduled" ${live.status === 'scheduled' ? 'selected' : ''}>Agendada</option><option value="live" ${live.status === 'live' ? 'selected' : ''}>Ao vivo</option><option value="finished" ${live.status === 'finished' ? 'selected' : ''}>Finalizada</option></select></label><label><span>Início</span><input name="startsAt" type="datetime-local" value="${new Date(live.starts_at).toISOString().slice(0,16)}"></label><label><span>Fim</span><input name="endsAt" type="datetime-local" value="${new Date(live.ends_at).toISOString().slice(0,16)}"></label><label><span>Mínimo (%)</span><input name="minimumPercent" type="number" value="${live.minimum_percent}"></label><label><span>Link da sala</span><input name="roomUrl" value="${escapeHtml(live.room_url)}"></label><label class="full"><span>Descrição</span><textarea name="description">${escapeHtml(live.description || '')}</textarea></label></form>`, `<button class="button ghost modal-cancel">Cancelar</button><button id="save-live" class="button primary">Salvar</button>`, true);
-        $('.modal-cancel').onclick = close;
-        $('#save-live').onclick = async () => {
-          const payload = Object.fromEntries(new FormData($('#live-edit-form')));
-          payload.startsAt = new Date(payload.startsAt).toISOString();
-          payload.endsAt = new Date(payload.endsAt).toISOString();
-          await api(`/api/teacher/live/${live.id}`, { method: 'PUT', body: payload });
-          close(); toast('Aula atualizada.'); render();
-        };
-      }
-    },
-
-    async attendance() {
-      setPage('Controle de presença e faltas', 'Administração');
-      const data = await api('/api/teacher/attendance');
-      view.innerHTML = `<div class="page-header"><div><h2>Presenças e faltas</h2><p>Uma falta online pelo conjunto semanal e uma falta por aula ao vivo.</p></div></div>
-        <div class="section-title"><h2>Faltas registradas</h2></div><div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Tipo</th><th>Semana</th><th>Motivo</th><th>Status</th><th>Ações</th></tr></thead><tbody>${data.absences.map(a => `<tr><td><strong>${escapeHtml(a.student_name)}</strong><br><small>${escapeHtml(a.email)}</small></td><td>${a.kind === 'online' ? 'Online semanal' : 'Aula ao vivo'}</td><td>${escapeHtml(a.week_key)}</td><td>${escapeHtml(a.reason || '')}</td><td><span class="badge ${Number(a.justified) ? '' : 'red'}">${Number(a.justified) ? 'Justificada' : 'Pendente'}</span></td><td><div class="actions"><button class="button secondary" data-justify="${a.id}" data-value="${Number(a.justified) ? 0 : 1}">${Number(a.justified) ? 'Retirar justificativa' : 'Justificar'}</button><button class="button danger" data-remove-absence="${a.id}">Remover</button></div></td></tr>`).join('') || '<tr><td colspan="6">Nenhuma falta registrada.</td></tr>'}</tbody></table></div>
-        <div class="section-title"><h2>Tempo nas aulas ao vivo</h2></div><div class="table-wrap"><table><thead><tr><th>Aula</th><th>Aluno</th><th>Tempo registrado</th><th>Último sinal</th></tr></thead><tbody>${data.attendance.map(a => `<tr><td>${escapeHtml(a.live_title)}</td><td>${escapeHtml(a.student_name)}</td><td>${Math.floor(Number(a.seconds_present)/60)} min</td><td>${formatDate(a.last_seen_at)}</td></tr>`).join('') || '<tr><td colspan="4">Nenhuma participação registrada.</td></tr>'}</tbody></table></div>`;
-      $$('[data-justify]').forEach(button => button.onclick = async () => {
-        const reason = prompt('Motivo/observação da justificativa:', 'Justificada pelo professor.');
-        if (reason === null) return;
-        await api(`/api/teacher/absences/${button.dataset.justify}`, { method: 'PUT', body: { justified: button.dataset.value === '1', reason } });
-        toast('Falta atualizada.'); navigate('attendance', {}, true);
-      });
-      $$('[data-remove-absence]').forEach(button => button.onclick = async () => {
-        if (!confirm('Remover esta falta?')) return;
-        await api(`/api/teacher/absences/${button.dataset.removeAbsence}`, { method: 'DELETE' });
-        toast('Falta removida.'); navigate('attendance', {}, true);
-      });
-    },
-
-    async reports() {
-      setPage('Relatórios dos alunos', 'Acompanhamento individual');
-      const data = await api('/api/teacher/reports');
-      view.innerHTML = `<div class="page-header"><div><h2>Relatórios individuais</h2><p>Abra um aluno para ver entregas, notas, tentativas e faltas.</p></div></div><div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Progresso</th><th>Média</th><th>Faltas</th><th>Ação</th></tr></thead><tbody>${data.students.map(s => `<tr><td><strong>${escapeHtml(s.name)}</strong><br><small>${escapeHtml(s.email)}</small></td><td>${s.progress}%</td><td>${s.grade}</td><td>${s.absences}</td><td><button class="button primary" data-report="${s.id}">Abrir relatório</button></td></tr>`).join('')}</tbody></table></div>`;
-      $$('[data-report]').forEach(button => button.onclick = () => openReport(Number(button.dataset.report)));
-
-      async function openReport(id) {
-        loading('Gerando relatório...');
-        const report = await api(`/api/teacher/reports/${id}`);
-        setPage(`Relatório de ${report.student.name}`, 'Relatório individual');
-        view.innerHTML = `<section class="card report-print"><div class="report-head"><div class="brand"><div><strong>Vanguard</strong><span>English School</span></div></div><div><h2 style="margin:0">Relatório individual</h2><p>${escapeHtml(report.student.name)} • ${escapeHtml(report.student.email)}</p></div></div><section class="grid three" style="margin-top:20px"><article class="card soft"><span class="stat-label">Progresso</span><b class="stat-value">${report.student.progress}%</b></article><article class="card soft"><span class="stat-label">Média</span><b class="stat-value">${report.student.grade}</b></article><article class="card soft"><span class="stat-label">Faltas</span><b class="stat-value">${report.student.absences}</b></article></section><div class="section-title"><h3>Entregas</h3></div><div class="table-wrap"><table><thead><tr><th>Atividade</th><th>Tipo</th><th>Nota</th><th>Tentativas</th><th>Entrega</th><th>Áudio</th></tr></thead><tbody>${report.submissions.map(s => `<tr><td>${escapeHtml(s.activity_title)}<br><small>${escapeHtml(s.unit_title)}</small></td><td>${typeLabel(s.type)}</td><td>${Number(s.score).toFixed(1)}</td><td>${s.attempts}</td><td><span class="badge ${Number(s.is_late) ? 'orange' : ''}">${Number(s.is_late) ? 'Atrasada' : 'No prazo'}</span></td><td>${s.audio_path ? `<audio controls src="${escapeHtml(s.audio_path)}"></audio>` : '—'}</td></tr>`).join('') || '<tr><td colspan="6">Sem entregas.</td></tr>'}</tbody></table></div><div class="section-title"><h3>Faltas</h3></div><div class="list">${report.absences.map(a => `<div class="list-item"><div><strong>${a.kind === 'online' ? 'Online semanal' : 'Aula ao vivo'}</strong><p>${escapeHtml(a.reason || '')}</p></div><span class="badge ${Number(a.justified) ? '' : 'red'}">${Number(a.justified) ? 'Justificada' : 'Pendente'}</span></div>`).join('') || '<p>Nenhuma falta.</p>'}</div><div class="actions" style="margin-top:22px"><button id="back-reports" class="button ghost">← Voltar</button><button id="print-report" class="button primary">Imprimir / salvar PDF</button></div></section>`;
-        $('#back-reports').onclick = () => navigate('reports');
-        $('#print-report').onclick = () => window.print();
-      }
-    },
-
-    async settings() {
-      setPage('Configurações', 'Curso e comunicação');
-      const students = await api('/api/teacher/students');
-      view.innerHTML = `<div class="page-header"><div><h2>Configurações</h2><p>Defina regras do curso e envie avisos.</p></div></div><section class="grid two"><article class="card"><span class="eyebrow dark">Regras de presença</span><form id="settings-form" class="form-stack" style="margin-top:15px"><label><span>Atividades mínimas da semana (%)</span><input name="online_min_percent" type="number" min="0" max="100" value="${escapeHtml(state.settings.online_min_percent || '70')}"></label><label><span>Tempo mínimo da aula ao vivo (%)</span><input name="live_min_percent" type="number" min="0" max="100" value="${escapeHtml(state.settings.live_min_percent || '75')}"></label><label><span>Proteção de conteúdo</span><select name="content_protection"><option value="1" ${Number(state.settings.content_protection) ? 'selected' : ''}>Ativada</option><option value="0" ${!Number(state.settings.content_protection) ? 'selected' : ''}>Desativada</option></select></label><button class="button primary">Salvar configurações</button></form></article><article class="card"><span class="eyebrow dark">Enviar aviso</span><form id="notice-form" class="form-stack" style="margin-top:15px"><label><span>Destinatário</span><select name="targetStudentId"><option value="">Todos os alunos</option>${students.students.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select></label><label><span>Título</span><input name="title" required></label><label><span>Mensagem</span><textarea name="message" required></textarea></label><button class="button orange">Enviar aviso</button></form></article></section><section class="card soft" style="margin-top:20px"><h3>Proteção do conteúdo</h3><p>A plataforma bloqueia seleção, cópia, botão direito e atalhos básicos e mostra uma marca d’água com nome e e-mail do aluno. Nenhum site consegue impedir totalmente fotografias ou capturas de tela feitas pelo aparelho.</p></section>`;
-      $('#settings-form').onsubmit = async event => {
-        event.preventDefault();
-        const result = await api('/api/teacher/settings', { method: 'PUT', body: Object.fromEntries(new FormData(event.target)) });
-        state.settings = result.settings;
-        toast('Configurações salvas.');
-      };
-      $('#notice-form').onsubmit = async event => {
-        event.preventDefault();
-        await api('/api/teacher/notices', { method: 'POST', body: Object.fromEntries(new FormData(event.target)) });
-        event.target.reset();
-        toast('Aviso enviado.');
-      };
-    }
-  };
-
-  $('#login-form').onsubmit = async event => {
-    event.preventDefault();
-    $('#login-message').textContent = '';
-    const submit = event.submitter || $('button[type="submit"]', event.currentTarget);
-    if (submit) { submit.disabled = true; submit.textContent = 'Entrando…'; }
+  async function showFullReport(studentId) {
     try {
-      await api('/api/login', {
-        method: 'POST',
-        body: { email: $('#login-email').value.trim(), password: $('#login-password').value, accessToken: state.token }
+      const dashboard = state.mode === 'server' ? await api(`/api/teacher/reports/${studentId}`) : demoStudentDashboard(studentId);
+      openModal({
+        title: `Relatório de ${dashboard.student.name}`,
+        subtitle: `${dashboard.summary.progress}% concluído · nota ${dashboard.summary.grade}`,
+        wide: true,
+        body: `<div class="stats-grid" style="grid-template-columns:repeat(4,minmax(0,1fr))">${statCard('Progresso', `${dashboard.summary.progress}%`, 'do curso')}${statCard('Nota', `${dashboard.summary.grade}`, 'de 10')}${statCard('Concluídas', `${dashboard.summary.completed}`, `de ${dashboard.summary.total}`)}${statCard('Faltas', `${dashboard.summary.absences}`, 'não justificadas')}</div><div class="section-heading"><div><h3>Tentativas recentes</h3></div></div><div class="list">${dashboard.attempts.slice(0, 10).map((attempt) => `<article class="list-item"><div class="list-item__main"><span class="list-item__icon">${attempt.correct ? '✓' : '!'}</span><div class="list-item__copy"><strong>${escapeHTML(attempt.activity_title)}</strong><span>${escapeHTML(attempt.feedback)}</span></div></div>${statusBadge(`Nota ${attempt.score}`, attempt.correct ? 'success' : 'warning')}</article>`).join('') || '<p class="muted">Sem tentativas.</p>'}</div>`,
+        footer: '<button class="btn btn--outline" data-action="close-modal">Fechar</button><button class="btn btn--primary" onclick="window.print()">Imprimir</button>'
       });
-      const result = await api('/api/me');
-      state.user = result.user;
-      state.settings = result.settings;
-      showApp();
-    } catch (error) {
-      $('#login-message').textContent = error.message;
-    } finally {
-      if (submit) { submit.disabled = false; submit.textContent = 'Entrar na plataforma'; }
-    }
-  };
-
-  $('#toggle-password').onclick = () => {
-    const field = $('#login-password');
-    field.type = field.type === 'password' ? 'text' : 'password';
-    $('#toggle-password').textContent = field.type === 'password' ? 'Mostrar' : 'Ocultar';
-  };
-
-  $('#fill-demo').onclick = () => {
-    const student = Boolean(state.token);
-    $('#login-email').value = student ? 'ana@vanguard.demo' : 'professor@vanguard.demo';
-    $('#login-password').value = student ? 'Aluno123' : 'Professor123';
-  };
-
-  $('#student-demo').onclick = () => {
-    const base = location.protocol === 'file:' ? 'http://localhost:3000/index.html' : location.href;
-    const url = new URL(base);
-    url.searchParams.set('token', 'ana-vanguard-demo');
-    url.hash = '';
-    location.href = url.toString();
-  };
-
-  $('#teacher-login').onclick = () => {
-    const base = location.protocol === 'file:' ? 'http://localhost:3000/index.html' : location.href;
-    const url = new URL(base);
-    url.searchParams.delete('token');
-    url.hash = '';
-    location.href = url.toString();
-  };
-
-  $('#logout-button').onclick = async () => {
-    try { await api('/api/logout', { method: 'POST', body: {} }); } catch {}
-    state.user = null;
-    location.hash = '';
-    showLogin(state.token);
-  };
-
-  $('#open-menu').onclick = () => {
-    $('#sidebar').classList.add('open');
-    $('#menu-backdrop').classList.add('active');
-  };
-  $('#close-menu').onclick = $('#menu-backdrop').onclick = () => {
-    $('#sidebar').classList.remove('open');
-    $('#menu-backdrop').classList.remove('active');
-  };
-
-  window.addEventListener('hashchange', () => {
-    if (!state.user) return;
-    const route = location.hash.replace('#', '') || (state.user.role === 'teacher' ? 'teacher-dashboard' : 'home');
-    navigate(route, {}, true);
-  });
-  window.addEventListener('resize', () => { if (state.user?.role === 'student') createWatermark(); });
-
-  async function bootstrap() {
-    window.__VANGUARD_READY__ = false;
-    if (location.protocol === 'file:') {
-      showLogin(state.token);
-      window.__VANGUARD_READY__ = true;
-      return;
-    }
-    try {
-      const result = await api('/api/me');
-      state.user = result.user;
-      state.settings = result.settings;
-      showApp();
-    } catch {
-      showLogin(state.token);
-    } finally {
-      window.__VANGUARD_READY__ = true;
-    }
+    } catch (error) { toast('Erro no relatório', error.message, 'error'); }
   }
 
-  bootstrap();
+  function bindStaticEvents() {
+    elements.togglePassword.addEventListener('click', () => {
+      const visible = elements.loginPassword.type === 'text';
+      elements.loginPassword.type = visible ? 'password' : 'text';
+      elements.togglePassword.textContent = visible ? 'Mostrar' : 'Ocultar';
+    });
+    elements.fillDemo.addEventListener('click', () => {
+      if (state.accessToken) {
+        elements.loginEmail.value = 'ana@vanguard.demo';
+        elements.loginPassword.value = 'Aluno123';
+      } else {
+        elements.loginEmail.value = 'professor@vanguard.demo';
+        elements.loginPassword.value = 'Professor123';
+      }
+    });
+    elements.logoutButton.addEventListener('click', logout);
+    elements.mobileMenu.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
+    elements.notificationButton.addEventListener('click', () => navigate('notices'));
+    elements.modalRoot.addEventListener('click', (event) => { if (event.target === elements.modalRoot) closeModal(); });
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeModal(); });
+    document.addEventListener('contextmenu', (event) => { if (document.body.classList.contains('protected-content') && !event.target.closest('input,textarea')) event.preventDefault(); });
+    document.addEventListener('copy', (event) => { if (document.body.classList.contains('protected-content') && !event.target.closest('input,textarea')) { event.preventDefault(); toast('Conteúdo protegido', 'A cópia deste material foi bloqueada.', 'error'); } });
+  }
+
+  function cacheElements() {
+    Object.assign(elements, {
+      boot: $('#boot'),
+      loginView: $('#login-view'),
+      platformView: $('#platform-view'),
+      environmentBadge: $('#environment-badge'),
+      loginEyebrow: $('#login-eyebrow'),
+      loginTitle: $('#login-title'),
+      loginCopy: $('#login-copy'),
+      loginForm: $('#login-form'),
+      loginEmail: $('#login-email'),
+      loginPassword: $('#login-password'),
+      loginFeedback: $('#login-feedback'),
+      togglePassword: $('#toggle-password'),
+      fillDemo: $('#fill-demo'),
+      demoLabel: $('#demo-label'),
+      demoCredentials: $('#demo-credentials'),
+      studentLinkNote: $('#student-link-note'),
+      mainNav: $('#main-nav'),
+      sidebarUser: $('#sidebar-user'),
+      topbarUser: $('#topbar-user'),
+      noticeCount: $('#notice-count'),
+      pageTitle: $('#page-title'),
+      pageKicker: $('#page-kicker'),
+      content: $('#content'),
+      logoutButton: $('#logout-button'),
+      mobileMenu: $('#mobile-menu'),
+      notificationButton: $('#notification-button'),
+      modalRoot: $('#modal-root'),
+      toastRoot: $('#toast-root'),
+      watermark: $('#watermark')
+    });
+  }
+
+  async function init() {
+    cacheElements();
+    bindStaticEvents();
+    setupEventDelegation();
+    setupSessionWatcher();
+    await checkEnvironment();
+    await validateAccessToken();
+    const restored = await restoreSession();
+    if (!restored) showLogin();
+    setTimeout(() => elements.boot.classList.add('is-done'), 950);
+  }
+
+  return { init, state };
 })();
+
+document.addEventListener('DOMContentLoaded', VanguardApp.init);
