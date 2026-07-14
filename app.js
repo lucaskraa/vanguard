@@ -9,13 +9,19 @@
   const navigation = $('#navigation');
   const modalRoot = $('#modal-root');
   const toastRoot = $('#toast-root');
+  const splashStartedAt = performance.now();
+  let splashClosing = false;
 
   function finishBoot() {
     const boot = $('#boot-fallback');
-    if (!boot) return;
-    boot.style.transition = 'opacity .28s ease';
-    boot.style.opacity = '0';
-    setTimeout(() => boot.remove(), 300);
+    if (!boot || splashClosing) return;
+    splashClosing = true;
+    const minimumVisibleTime = 1250;
+    const wait = Math.max(0, minimumVisibleTime - (performance.now() - splashStartedAt));
+    setTimeout(() => {
+      boot.classList.add('is-leaving');
+      setTimeout(() => boot.remove(), 460);
+    }, wait);
   }
 
   function showServerWarning(show = true) {
