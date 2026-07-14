@@ -1,13 +1,16 @@
-
 {
   "name": "vanguard-english-school",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "Plataforma híbrida da Vanguard English School",
+  "description": "Plataforma híbrida da Vanguard English School em apenas sete arquivos",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "check": "node --check server.js && node --check db.js && node --check app.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
