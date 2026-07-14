@@ -10,6 +10,19 @@
   const modalRoot = $('#modal-root');
   const toastRoot = $('#toast-root');
 
+  function finishBoot() {
+    const boot = $('#boot-fallback');
+    if (!boot) return;
+    boot.style.transition = 'opacity .28s ease';
+    boot.style.opacity = '0';
+    setTimeout(() => boot.remove(), 300);
+  }
+
+  function showServerWarning(show = true) {
+    const warning = $('#server-warning');
+    if (warning) warning.classList.toggle('hidden', !show);
+  }
+
   const state = {
     user: null,
     settings: {},
@@ -83,7 +96,16 @@
       config.headers['Content-Type'] = 'application/json';
       config.body = JSON.stringify(options.body);
     }
-    const response = await fetch(url, config);
+    let response;
+    try {
+      response = await fetch(url, config);
+    } catch (networkError) {
+      showServerWarning(true);
+      const error = new Error('O servidor Node.js não está ligado. Execute npm install, depois npm start, e abra http://localhost:3000.');
+      error.status = 0;
+      error.cause = networkError;
+      throw error;
+    }
     let data = {};
     try { data = await response.json(); } catch {}
     if (!response.ok) {
@@ -91,6 +113,7 @@
       error.status = response.status;
       throw error;
     }
+    showServerWarning(false);
     return data;
   }
 
@@ -133,9 +156,11 @@
   }
 
   function showLogin(token = '') {
+    finishBoot();
     state.token = token;
     appScreen.classList.add('hidden');
     authScreen.classList.remove('hidden');
+    showServerWarning(location.protocol === 'file:');
     const student = Boolean(token);
     $('#login-kicker').textContent = student ? 'Link individual protegido' : 'Área do professor';
     $('#login-title').textContent = student ? 'Área do aluno' : 'Bem-vindo de volta';
@@ -207,6 +232,8 @@
   }
 
   function showApp() {
+    finishBoot();
+    showServerWarning(false);
     authScreen.classList.add('hidden');
     appScreen.classList.remove('hidden');
     const short = state.user.name.split(' ')[0];
@@ -410,7 +437,7 @@
       let lastSignature = '';
       const render = async (force = false) => {
         const data = await api('/api/student/live');
-        const signature = JSON.stringify({ live: data.live?.id, question: data.question?.id, revealed: data.question?.revealed, chosen: data.question?.chosen_student_id, answered: data.myAnswer?.id });
+        const signature = JSON.stringify({ live: data.live?.id, question: data.question?.id, revealed: data.question?.revealed, chosen: data.question?.chosen_student_id, answered: data.myAnswer?.id, answers: data.classAnswers?.length || 0 });
         if (!force && signature === lastSignature) return;
         lastSignature = signature;
         if (!data.live) {
@@ -423,7 +450,10 @@
         if (question) {
           const elapsed = Math.floor((Date.now() - new Date(question.created_at).getTime()) / 1000);
           const remaining = Math.max(0, Number(question.seconds_to_answer) - elapsed);
-          questionHtml = `<div class="question-box"><span class="eyebrow dark">Pergunta do professor</span><h3>${escapeHtml(question.prompt)}</h3><div class="timer" data-timer="${remaining}">${remaining}s</div>${data.myAnswer ? `<div class="feedback">Sua resposta foi enviada. As respostas dos colegas continuam ocultas.</div>` : `<label class="field"><span>Sua resposta</span><textarea id="live-answer"></textarea></label><div class="actions"><button id="send-live-answer" class="button primary">Enviar por texto</button><button id="record-live-answer" class="button secondary">Gravar áudio</button></div>`}${question.chosen_student_name ? `<p><strong>Aluno escolhido para responder:</strong> ${escapeHtml(question.chosen_student_name)}</p>` : ''}${Number(question.revealed) ? `<div class="feedback"><strong>Resposta correta:</strong> ${escapeHtml(question.correct_answer || 'Resposta liberada pelo professor.')}</div>` : ''}</div>`;
+          const releasedAnswers = Number(question.revealed)
+            ? `<div class="released-answers"><h4>Respostas da turma</h4>${(data.classAnswers || []).map(answer => `<div class="released-answer"><strong>${escapeHtml(answer.student_name)}</strong><span>${escapeHtml(answer.answer_text || 'Resposta em áudio')}</span>${answer.audio_path ? `<audio controls src="${escapeHtml(answer.audio_path)}"></audio>` : ''}</div>`).join('') || '<p class="muted">Nenhuma resposta foi enviada.</p>'}</div>`
+            : '';
+          questionHtml = `<div class="question-box"><span class="eyebrow dark">Pergunta do professor</span><h3>${escapeHtml(question.prompt)}</h3><div class="timer" data-timer="${remaining}">${remaining}s</div>${data.myAnswer ? `<div class="feedback">Sua resposta foi enviada. As respostas dos colegas ficam ocultas até o professor liberar.</div>` : `<label class="field"><span>Sua resposta</span><textarea id="live-answer"></textarea></label><div class="actions"><button id="send-live-answer" class="button primary">Enviar por texto</button><button id="record-live-answer" class="button secondary">Gravar áudio</button></div>`}${question.chosen_student_name ? `<p><strong>Aluno escolhido para responder:</strong> ${escapeHtml(question.chosen_student_name)}</p>` : ''}${Number(question.revealed) ? `<div class="feedback"><strong>Resposta correta:</strong> ${escapeHtml(question.correct_answer || 'Resposta liberada pelo professor.')}</div>${releasedAnswers}` : ''}</div>`;
         }
         view.innerHTML = `<div class="page-header"><div><h2>${escapeHtml(data.live.title)}</h2><p>${formatDate(data.live.starts_at)} • presença registrada automaticamente</p></div><span class="badge ${data.live.status === 'live' ? '' : 'orange'}">${data.live.status === 'live' ? 'Ao vivo' : 'Agendada'}</span></div><div class="live-grid"><iframe class="live-frame" src="${escapeHtml(data.live.room_url)}" allow="camera; microphone; fullscreen; display-capture"></iframe><aside class="card"><h3>Interação da aula</h3><p class="muted">As respostas dos colegas só aparecem quando o professor liberar.</p>${questionHtml}</aside></div>`;
         if (!state.heartbeat) state.heartbeat = setInterval(() => api(`/api/student/live/${data.live.id}/heartbeat`, { method: 'POST', body: {} }).catch(() => {}), 15000);
@@ -496,7 +526,8 @@
       view.innerHTML = `<div class="page-header"><div><h2>Visão geral da turma</h2><p>Acompanhe somente os dados importantes para o curso.</p></div><button class="button primary" data-go="builder">+ Criar atividade</button></div>
         <section class="grid four"><article class="card stat-card"><span class="stat-label">Alunos ativos</span><b class="stat-value">${data.cards.students}</b></article><article class="card stat-card"><span class="stat-label">Atividades</span><b class="stat-value">${data.cards.activities}</b></article><article class="card stat-card"><span class="stat-label">Entregas</span><b class="stat-value">${data.cards.submissions}</b></article><article class="card stat-card"><span class="stat-label">Faltas pendentes</span><b class="stat-value">${data.cards.absences}</b></article></section>
         <section class="grid two" style="margin-top:24px"><article class="card"><span class="eyebrow dark">Próxima aula</span>${data.live ? `<h3 style="margin-top:12px">${escapeHtml(data.live.title)}</h3><p>${formatDate(data.live.starts_at)}</p><p class="muted">${escapeHtml(data.live.description || '')}</p><button class="button primary" data-go="teacher-live">Gerenciar aula</button>` : '<p>Nenhuma aula marcada.</p>'}</article><article class="card"><span class="eyebrow dark">Acesso rápido</span><div class="actions" style="margin-top:16px"><button class="button secondary" data-go="students">Cadastrar aluno</button><button class="button secondary" data-go="attendance">Ver faltas</button><button class="button secondary" data-go="reports">Relatórios</button></div></article></section>
-        <div class="section-title"><h2>Progresso dos alunos</h2></div><div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Progresso</th><th>Média</th><th>Faltas</th><th>Status</th></tr></thead><tbody>${data.students.map(s => `<tr><td><strong>${escapeHtml(s.name)}</strong><br><small>${escapeHtml(s.email)}</small></td><td><div class="progress-track"><div class="progress-bar" style="width:${s.progress}%"></div></div><small>${s.progress}%</small></td><td>${s.grade}</td><td>${s.absences}</td><td><span class="badge ${Number(s.active) ? '' : 'red'}">${Number(s.active) ? 'Ativo' : 'Bloqueado'}</span></td></tr>`).join('')}</tbody></table></div>`;
+        <div class="section-title"><h2>Progresso dos alunos</h2></div><div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Progresso</th><th>Média</th><th>Faltas</th><th>Status</th></tr></thead><tbody>${data.students.map(s => `<tr><td><strong>${escapeHtml(s.name)}</strong><br><small>${escapeHtml(s.email)}</small></td><td><div class="progress-track"><div class="progress-bar" style="width:${s.progress}%"></div></div><small>${s.progress}%</small></td><td>${s.grade}</td><td>${s.absences}</td><td><span class="badge ${Number(s.active) ? '' : 'red'}">${Number(s.active) ? 'Ativo' : 'Bloqueado'}</span></td></tr>`).join('')}</tbody></table></div>
+        <div class="section-title"><div><h2>Entregas da semana</h2><p class="muted">${escapeHtml(data.currentWeek || '')} • veja quem entregou, atrasou ou ainda não realizou.</p></div></div><div class="table-wrap"><table><thead><tr><th>Aluno</th><th>Entregou</th><th>Atrasadas</th><th>Não realizadas</th><th>Situação</th></tr></thead><tbody>${data.students.map(s => `<tr><td><strong>${escapeHtml(s.name)}</strong></td><td>${s.delivered} de ${s.weeklyTotal}</td><td>${s.late}</td><td>${s.missing}</td><td><span class="badge ${s.missing ? 'orange' : s.late ? 'red' : ''}">${s.missing ? 'Pendente' : s.late ? 'Entregou com atraso' : 'Em dia'}</span></td></tr>`).join('')}</tbody></table></div>`;
       $$('[data-go]').forEach(button => button.onclick = () => navigate(button.dataset.go));
     },
 
@@ -682,7 +713,7 @@
         loading('Gerando relatório...');
         const report = await api(`/api/teacher/reports/${id}`);
         setPage(`Relatório de ${report.student.name}`, 'Relatório individual');
-        view.innerHTML = `<section class="card report-print"><div class="report-head"><div class="brand"><div><strong>Vanguard</strong><span>English School</span></div></div><div><h2 style="margin:0">Relatório individual</h2><p>${escapeHtml(report.student.name)} • ${escapeHtml(report.student.email)}</p></div></div><section class="grid three" style="margin-top:20px"><article class="card soft"><span class="stat-label">Progresso</span><b class="stat-value">${report.student.progress}%</b></article><article class="card soft"><span class="stat-label">Média</span><b class="stat-value">${report.student.grade}</b></article><article class="card soft"><span class="stat-label">Faltas</span><b class="stat-value">${report.student.absences}</b></article></section><div class="section-title"><h3>Entregas</h3></div><div class="table-wrap"><table><thead><tr><th>Atividade</th><th>Tipo</th><th>Nota</th><th>Tentativas</th><th>Áudio</th></tr></thead><tbody>${report.submissions.map(s => `<tr><td>${escapeHtml(s.activity_title)}<br><small>${escapeHtml(s.unit_title)}</small></td><td>${typeLabel(s.type)}</td><td>${Number(s.score).toFixed(1)}</td><td>${s.attempts}</td><td>${s.audio_path ? `<audio controls src="${escapeHtml(s.audio_path)}"></audio>` : '—'}</td></tr>`).join('') || '<tr><td colspan="5">Sem entregas.</td></tr>'}</tbody></table></div><div class="section-title"><h3>Faltas</h3></div><div class="list">${report.absences.map(a => `<div class="list-item"><div><strong>${a.kind === 'online' ? 'Online semanal' : 'Aula ao vivo'}</strong><p>${escapeHtml(a.reason || '')}</p></div><span class="badge ${Number(a.justified) ? '' : 'red'}">${Number(a.justified) ? 'Justificada' : 'Pendente'}</span></div>`).join('') || '<p>Nenhuma falta.</p>'}</div><div class="actions" style="margin-top:22px"><button id="back-reports" class="button ghost">← Voltar</button><button id="print-report" class="button primary">Imprimir / salvar PDF</button></div></section>`;
+        view.innerHTML = `<section class="card report-print"><div class="report-head"><div class="brand"><div><strong>Vanguard</strong><span>English School</span></div></div><div><h2 style="margin:0">Relatório individual</h2><p>${escapeHtml(report.student.name)} • ${escapeHtml(report.student.email)}</p></div></div><section class="grid three" style="margin-top:20px"><article class="card soft"><span class="stat-label">Progresso</span><b class="stat-value">${report.student.progress}%</b></article><article class="card soft"><span class="stat-label">Média</span><b class="stat-value">${report.student.grade}</b></article><article class="card soft"><span class="stat-label">Faltas</span><b class="stat-value">${report.student.absences}</b></article></section><div class="section-title"><h3>Entregas</h3></div><div class="table-wrap"><table><thead><tr><th>Atividade</th><th>Tipo</th><th>Nota</th><th>Tentativas</th><th>Entrega</th><th>Áudio</th></tr></thead><tbody>${report.submissions.map(s => `<tr><td>${escapeHtml(s.activity_title)}<br><small>${escapeHtml(s.unit_title)}</small></td><td>${typeLabel(s.type)}</td><td>${Number(s.score).toFixed(1)}</td><td>${s.attempts}</td><td><span class="badge ${Number(s.is_late) ? 'orange' : ''}">${Number(s.is_late) ? 'Atrasada' : 'No prazo'}</span></td><td>${s.audio_path ? `<audio controls src="${escapeHtml(s.audio_path)}"></audio>` : '—'}</td></tr>`).join('') || '<tr><td colspan="6">Sem entregas.</td></tr>'}</tbody></table></div><div class="section-title"><h3>Faltas</h3></div><div class="list">${report.absences.map(a => `<div class="list-item"><div><strong>${a.kind === 'online' ? 'Online semanal' : 'Aula ao vivo'}</strong><p>${escapeHtml(a.reason || '')}</p></div><span class="badge ${Number(a.justified) ? '' : 'red'}">${Number(a.justified) ? 'Justificada' : 'Pendente'}</span></div>`).join('') || '<p>Nenhuma falta.</p>'}</div><div class="actions" style="margin-top:22px"><button id="back-reports" class="button ghost">← Voltar</button><button id="print-report" class="button primary">Imprimir / salvar PDF</button></div></section>`;
         $('#back-reports').onclick = () => navigate('reports');
         $('#print-report').onclick = () => window.print();
       }
@@ -710,6 +741,8 @@
   $('#login-form').onsubmit = async event => {
     event.preventDefault();
     $('#login-message').textContent = '';
+    const submit = event.submitter || $('button[type="submit"]', event.currentTarget);
+    if (submit) { submit.disabled = true; submit.textContent = 'Entrando…'; }
     try {
       await api('/api/login', {
         method: 'POST',
@@ -721,6 +754,8 @@
       showApp();
     } catch (error) {
       $('#login-message').textContent = error.message;
+    } finally {
+      if (submit) { submit.disabled = false; submit.textContent = 'Entrar na plataforma'; }
     }
   };
 
@@ -737,14 +772,16 @@
   };
 
   $('#student-demo').onclick = () => {
-    const url = new URL(location.href);
+    const base = location.protocol === 'file:' ? 'http://localhost:3000/index.html' : location.href;
+    const url = new URL(base);
     url.searchParams.set('token', 'ana-vanguard-demo');
     url.hash = '';
     location.href = url.toString();
   };
 
   $('#teacher-login').onclick = () => {
-    const url = new URL(location.href);
+    const base = location.protocol === 'file:' ? 'http://localhost:3000/index.html' : location.href;
+    const url = new URL(base);
     url.searchParams.delete('token');
     url.hash = '';
     location.href = url.toString();
@@ -774,6 +811,12 @@
   window.addEventListener('resize', () => { if (state.user?.role === 'student') createWatermark(); });
 
   async function bootstrap() {
+    window.__VANGUARD_READY__ = false;
+    if (location.protocol === 'file:') {
+      showLogin(state.token);
+      window.__VANGUARD_READY__ = true;
+      return;
+    }
     try {
       const result = await api('/api/me');
       state.user = result.user;
@@ -781,6 +824,8 @@
       showApp();
     } catch {
       showLogin(state.token);
+    } finally {
+      window.__VANGUARD_READY__ = true;
     }
   }
 
